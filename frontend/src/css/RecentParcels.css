@@ -1,0 +1,237 @@
+/* Recent Parcels Panel */
+.recent-parcels-panel {
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 15px;
+  padding: 20px;
+  height: 100%;
+}
+
+.recent-parcels-panel h2 {
+  color: white;
+  margin-bottom: 20px;
+  font-size: 1.5em;
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+.parcels-table {
+  width: 100%;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.table-header {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1.5fr 1.5fr;
+  gap: 10px;
+  background: rgba(255, 255, 255, 0.1);
+  padding: 12px;
+  font-weight: 600;
+  color: white;
+  font-size: 0.9em;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.table-body {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.table-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1.5fr 1.5fr;
+  gap: 10px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  transition: background-color 0.3s ease;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 0.85em;
+  align-items: center;
+}
+
+.table-row:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.table-row:last-child {
+  border-bottom: none;
+}
+
+.col-id {
+  font-weight: 600;
+  color: #64b5f6;
+}
+
+.col-weight {
+  font-weight: 500;
+}
+
+.size-badge {
+  padding: 3px 8px;
+  border-radius: 12px;
+  font-size: 0.75em;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  display: inline-block;
+}
+
+.size-badge.green {
+  background-color: rgba(76, 175, 80, 0.2);
+  color: #4CAF50;
+  border: 1px solid rgba(76, 175, 80, 0.3);
+}
+
+.size-badge.orange {
+  background-color: rgba(255, 152, 0, 0.2);
+  color: #ff9800;
+  border: 1px solid rgba(255, 152, 0, 0.3);
+}
+
+.size-badge.red {
+  background-color: rgba(244, 67, 54, 0.2);
+  color: #f44336;
+  border: 1px solid rgba(244, 67, 54, 0.3);
+}
+
+.col-destination {
+  font-weight: 500;
+  color: #81c784;
+}
+
+.col-time {
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.8em;
+}
+
+/* Custom Scrollbar */
+.table-body::-webkit-scrollbar {
+  width: 6px;
+}
+
+.table-body::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+}
+
+.table-body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 3px;
+}
+
+.table-body::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.5);
+}
+
+/* Responsive Design */
+@media (max-width: 900px) {
+  .table-header,
+  .table-row {
+    grid-template-columns: 1.5fr 1fr 1fr 1fr 1fr;
+    gap: 5px;
+    padding: 8px;
+  }
+  
+  .table-header {
+    font-size: 0.8em;
+  }
+  
+  .table-row {
+    font-size: 0.8em;
+  }
+}
+
+/* LCD Display Optimization (800x480) */
+@media (max-width: 800px) and (max-height: 480px) {
+  .recent-parcels-panel {
+    padding: 12px;
+  }
+  
+  .recent-parcels-panel h2 {
+    font-size: 1.2em;
+    margin-bottom: 12px;
+  }
+  
+  .table-header,
+  .table-row {
+    grid-template-columns: 1.5fr 0.8fr 0.8fr 1fr 1fr;
+    gap: 4px;
+    padding: 6px;
+  }
+  
+  .table-header {
+    font-size: 0.7em;
+  }
+  
+  .table-row {
+    font-size: 0.7em;
+  }
+  
+  .table-body {
+    max-height: 200px;
+  }
+  
+  .size-badge {
+    font-size: 0.65em;
+    padding: 2px 6px;
+  }
+  
+  .col-time {
+    font-size: 0.65em;
+  }
+}
+
+@media (max-width: 600px) {
+  .table-header,
+  .table-row {
+    grid-template-columns: 1fr;
+    gap: 5px;
+  }
+  
+  .table-row {
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  
+  .table-row > div {
+    margin-bottom: 5px;
+  }
+  
+  .table-row > div:last-child {
+    margin-bottom: 0;
+  }
+  
+  .table-header {
+    display: none;
+  }
+  
+  .col-id::before {
+    content: "ID: ";
+    font-weight: 400;
+    color: rgba(255, 255, 255, 0.7);
+  }
+  
+  .col-weight::before {
+    content: "Weight: ";
+    font-weight: 400;
+    color: rgba(255, 255, 255, 0.7);
+  }
+  
+  .col-destination::before {
+    content: "Destination: ";
+    font-weight: 400;
+    color: rgba(255, 255, 255, 0.7);
+  }
+  
+  .col-time::before {
+    content: "Time: ";
+    font-weight: 400;
+    color: rgba(255, 255, 255, 0.7);
+  }
+}

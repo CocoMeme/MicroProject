@@ -1,0 +1,129 @@
+/* Stat Card Styles */
+.stat-card {
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 15px;
+  padding: 20px;
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.stat-card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+}
+
+.stat-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, #667eea, #764ba2);
+  opacity: 0.8;
+}
+
+.stat-icon {
+  font-size: 2.5em;
+  opacity: 0.9;
+}
+
+.stat-content {
+  flex: 1;
+}
+
+.stat-content h3 {
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 0.9em;
+  margin-bottom: 5px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  font-weight: 500;
+}
+
+.stat-value {
+  color: white;
+  font-size: 2.2em;
+  font-weight: 700;
+  text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+/* Color Variants */
+.stat-card.blue::before {
+  background: linear-gradient(90deg, #3498db, #2980b9);
+}
+
+.stat-card.green::before {
+  background: linear-gradient(90deg, #4CAF50, #45a049);
+}
+
+.stat-card.orange::before {
+  background: linear-gradient(90deg, #ff9800, #f57f17);
+}
+
+.stat-card.purple::before {
+  background: linear-gradient(90deg, #9c27b0, #7b1fa2);
+}
+
+/* Responsive Design */
+@media (max-width: 900px) {
+  .stat-card {
+    padding: 15px;
+    gap: 12px;
+  }
+  
+  .stat-icon {
+    font-size: 2em;
+  }
+  
+  .stat-value {
+    font-size: 1.8em;
+  }
+  
+  .stat-content h3 {
+    font-size: 0.8em;
+  }
+}
+
+/* LCD Display Optimization (800x480) */
+@media (max-width: 800px) and (max-height: 480px) {
+  .stat-card {
+    padding: 10px;
+    gap: 8px;
+  }
+  
+  .stat-icon {
+    font-size: 1.5em;
+  }
+  
+  .stat-value {
+    font-size: 1.4em;
+  }
+  
+  .stat-content h3 {
+    font-size: 0.7em;
+    margin-bottom: 2px;
+  }
+}
+
+@media (max-width: 600px) {
+  .stat-card {
+    flex-direction: column;
+    text-align: center;
+    gap: 10px;
+  }
+  
+  .stat-icon {
+    font-size: 2em;
+  }
+  
+  .stat-value {
+    font-size: 1.6em;
+  }
+}
