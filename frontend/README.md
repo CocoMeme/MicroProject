@@ -1,83 +1,70 @@
-# Frontend for Parcel Sorting Machine
+# Getting Started with Create React App
 
-This is the React frontend for the Parcel Sorting Machine project using Raspberry Pi 5 and ESP32.
+This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
 
-## Setup
+## Available Scripts
 
-### Prerequisites
-- Node.js 16 or higher
-- npm (comes with Node.js)
+In the project directory, you can run:
 
-### Installation
+### `npm start`
 
-1. Install dependencies:
-```bash
-npm install
-```
+Runs the app in the development mode.\
+Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
 
-### Running the Application
+The page will reload when you make changes.\
+You may also see any lint errors in the console.
 
-1. Start the development server:
-```bash
-npm run dev
-```
+### `npm test`
 
-The development server will start on `http://localhost:5173`
+Launches the test runner in the interactive watch mode.\
+See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
 
-2. Build for production:
-```bash
-npm run build
-```
+### `npm run build`
 
-3. Preview the production build:
-```bash
-npm run preview
-```
+Builds the app for production to the `build` folder.\
+It correctly bundles React in production mode and optimizes the build for the best performance.
 
-## Project Structure
+The build is minified and the filenames include the hashes.\
+Your app is ready to be deployed!
 
-```
-frontend/
-├── src/
-│   ├── components/     # React components
-│   ├── pages/         # Page components
-│   ├── hooks/         # Custom React hooks
-│   ├── utils/         # Utility functions
-│   ├── App.jsx        # Main App component
-│   └── main.jsx       # Entry point
-├── public/            # Static assets
-├── package.json       # Dependencies and scripts
-├── vite.config.js     # Vite configuration
-├── .gitignore        # Git ignore file
-└── README.md         # This file
-```
+See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
 
-## Development
+### `npm run eject`
 
-- The frontend is built with React and Vite for fast development
-- Hot Module Replacement (HMR) is enabled for instant updates
-- ESLint is configured for code quality
-- The app will communicate with the Flask backend API
-- Real-time updates from ESP32 sensors will be displayed
+**Note: this is a one-way operation. Once you `eject`, you can't go back!**
 
-## Technologies Used
+If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
 
-- **React** - UI library
-- **Vite** - Build tool and development server
-- **JavaScript** - Programming language
-- **CSS3** - Styling
+Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
 
-## API Integration
+You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
 
-*To be documented as API endpoints are implemented*+ Vite
+## Learn More
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
 
-Currently, two official plugins are available:
+To learn React, check out the [React documentation](https://reactjs.org/).
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+### Code Splitting
 
-## Expanding the ESLint configuration
+This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+### Analyzing the Bundle Size
+
+This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
+
+### Making a Progressive Web App
+
+This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
+
+### Advanced Configuration
+
+This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
+
+### Deployment
+
+This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
+
+### `npm run build` fails to minify
+
+This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
