@@ -29,30 +29,27 @@ import {
   Person as PersonIcon,
   ChevronLeft as ChevronLeftIcon,
   ShoppingCart as OrdersIcon,
-  Store as StoreIcon,
 } from '@mui/icons-material';
-import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
+import { Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom';
 import Dashboard from '../pages/Dashboard';
 import Parcels from '../pages/Parcels';
 import Shipping from '../pages/Shipping';
 import Reports from '../pages/Reports';
 import Settings from '../pages/Settings';
 import Orders from '../pages/Orders';
-import Products from '../pages/Products';
 
 const drawerWidth = 280;
 
 const menuItems = [
-  { text: 'Products', icon: <StoreIcon />, path: '/products' },
-  { text: 'Dashboard', icon: <DashboardIcon />, path: '/' },
-  { text: 'Orders', icon: <OrdersIcon />, path: '/orders' },
-  { text: 'Parcels', icon: <InventoryIcon />, path: '/parcels' },
-  { text: 'Shipping', icon: <ShippingIcon />, path: '/shipping' },
-  { text: 'Reports', icon: <ReportsIcon />, path: '/reports' },
-  { text: 'Settings', icon: <SettingsIcon />, path: '/settings' },
+  { text: 'Dashboard', icon: <DashboardIcon />, path: '/admin' },
+  { text: 'Orders', icon: <OrdersIcon />, path: '/admin/orders' },
+  { text: 'Parcels', icon: <InventoryIcon />, path: '/admin/parcels' },
+  { text: 'Shipping', icon: <ShippingIcon />, path: '/admin/shipping' },
+  { text: 'Reports', icon: <ReportsIcon />, path: '/admin/reports' },
+  { text: 'Settings', icon: <SettingsIcon />, path: '/admin/settings' },
 ];
 
-export default function Layout() {
+export default function AdminLayout() {
   const [open, setOpen] = useState(true);
   const [anchorEl, setAnchorEl] = useState(null);
   const [notificationAnchor, setNotificationAnchor] = useState(null);
@@ -85,7 +82,7 @@ export default function Layout() {
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <Box sx={{ p: 3, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <Typography variant="h6" sx={{ fontWeight: 600, color: theme.palette.primary.main }}>
-          Package Sorter
+          Admin Dashboard
         </Typography>
         {open && (
           <IconButton onClick={handleDrawerToggle} sx={{ display: { md: 'flex', lg: 'none' } }}>
@@ -209,13 +206,13 @@ export default function Layout() {
         }}
       >
         <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/products" element={<Products />} />
-          <Route path="/orders" element={<Orders />} />
-          <Route path="/parcels" element={<Parcels />} />
-          <Route path="/shipping" element={<Shipping />} />
-          <Route path="/reports" element={<Reports />} />
-          <Route path="/settings" element={<Settings />} />
+          <Route path="/" element={<Navigate to="/admin" replace />} />
+          <Route path="" element={<Dashboard />} />
+          <Route path="orders" element={<Orders />} />
+          <Route path="parcels" element={<Parcels />} />
+          <Route path="shipping" element={<Shipping />} />
+          <Route path="reports" element={<Reports />} />
+          <Route path="settings" element={<Settings />} />
         </Routes>
       </Box>
 

@@ -1,6 +1,8 @@
 import React from 'react';
 import { ThemeProvider, createTheme, CssBaseline } from '@mui/material';
-import Layout from './components/Layout';
+import { Routes, Route, Navigate } from 'react-router-dom';
+import AdminLayout from './components/AdminLayout';
+import Products from './pages/Products';
 import './App.css';
 
 const theme = createTheme({
@@ -163,7 +165,16 @@ function App() {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      <Layout />
+      <Routes>
+        {/* Public routes */}
+        <Route path="/" element={<Products />} />
+        
+        {/* Admin routes */}
+        <Route path="/admin/*" element={<AdminLayout />} />
+        
+        {/* Redirect any unknown routes to home */}
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
     </ThemeProvider>
   );
 }
