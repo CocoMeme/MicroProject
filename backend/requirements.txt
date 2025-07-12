@@ -1,9 +1,8 @@
-fastapi==0.110.0
-uvicorn==0.27.1
-pydantic==2.6.3
-pillow==10.2.0
+flask==3.0.0
+pillow==10.0.0
 qrcode==7.4.2
-Flask==3.0.2
-requests==2.31.0
-python-dotenv==1.0.1
-Flask-CORS==4.0.0
+python-dotenv==1.0.0
+opencv-python==4.8.0.76
+numpy==1.24.3
+picamera2==0.3.12
+pyzbar==0.1.9 

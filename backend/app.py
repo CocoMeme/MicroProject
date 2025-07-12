@@ -109,7 +109,7 @@ def get_dashboard_data():
     parcel_data["sorting_rate"] = random.randint(140, 150)
     parcel_data["conveyor_speed"] = round(random.uniform(2.0, 3.0), 1)
     parcel_data["last_update"] = datetime.now().isoformat()
-    
+
     return jsonify(parcel_data)
 
 @app.route('/api/recent-parcels')
@@ -134,7 +134,7 @@ def print_qr_code():
     try:
         data = request.get_json()
         order_id = data.get('orderId')
-        
+
         if not order_id:
             return jsonify({'error': 'Order ID is required'}), 400
 
@@ -170,7 +170,7 @@ def print_qr_code():
                 headers={'Content-Type': 'application/json'},
                 timeout=10  # Add timeout to prevent hanging
             )
-            
+
             if response.status_code == 200:
                 return jsonify({
                     'message': f'QR code print request sent for order {order_id}',
@@ -181,7 +181,7 @@ def print_qr_code():
                     'error': 'Failed to print QR code',
                     'details': response.text
                 }), response.status_code
-                
+
         except requests.RequestException as e:
             error_msg = str(e)
             # Check if it's a connection error
@@ -220,26 +220,26 @@ def create_order():
     try:
         data = request.get_json()
         required_fields = ['customerName', 'email', 'address', 'productId']
-        
+
         # Validate required fields
         for field in required_fields:
             if field not in data:
                 return jsonify({'error': f'Missing required field: {field}'}), 400
-        
+
         # Find selected product
         product = next((p for p in products_data if p['id'] == data['productId']), None)
         if not product:
             return jsonify({'error': 'Invalid product ID'}), 400
-        
+
         # Connect to database
         conn = sqlite3.connect('database.db')
         c = conn.cursor()
-        
+
         # Get the next order ID
         c.execute('SELECT COUNT(*) FROM orders')
         order_count = c.fetchone()[0]
         new_order_number = f"ORD-{str(order_count + 1).zfill(3)}"
-        
+
         # Insert new order
         c.execute('''
             INSERT INTO orders (
@@ -257,31 +257,26 @@ def create_order():
             datetime.now().strftime("%Y-%m-%d"),
             'Pending'
         ))
-        
+
         # Get the inserted order
         order_id = c.lastrowid
         conn.commit()
-        
+
         # Fetch the created order
         conn.row_factory = dict_factory
         c = conn.cursor()
         c.execute('SELECT * FROM orders WHERE id = ?', (order_id,))
         new_order = c.fetchone()
         conn.close()
-        
+
         return jsonify({
             'message': 'Order created successfully',
             'order': new_order
         }), 201
-        
+
     except Exception as e:
         return jsonify({'error': 'Internal server error', 'details': str(e)}), 500
 
-<<<<<<< HEAD
-=======
-<<<<<<< HEAD
-<<<<<<< HEAD
->>>>>>> db4fd31f35af4e3754cc800d46c8e734e1306456
 @app.route('/api/camera/status')
 def get_camera_status():
     """Get the status of the Raspberry Pi camera"""
@@ -387,12 +382,5 @@ def get_full_system_status():
             'details': str(e)
         }), 503
 
-<<<<<<< HEAD
-=======
-=======
->>>>>>> 5ee4dd2bd6d9e84866d9a58f5e54dfdb6ce6d359
-=======
->>>>>>> parent of e909c783 (cam in webserver (no qr code yet))
->>>>>>> db4fd31f35af4e3754cc800d46c8e734e1306456
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
