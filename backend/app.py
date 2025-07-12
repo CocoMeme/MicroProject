@@ -277,7 +277,6 @@ def create_order():
     except Exception as e:
         return jsonify({'error': 'Internal server error', 'details': str(e)}), 500
 
-<<<<<<< HEAD
 @app.route('/api/camera/status')
 def get_camera_status():
     """Get the status of the Raspberry Pi camera"""
@@ -383,7 +382,5 @@ def get_full_system_status():
             'details': str(e)
         }), 503
 
-=======
->>>>>>> 5ee4dd2bd6d9e84866d9a58f5e54dfdb6ce6d359
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
