@@ -277,5 +277,110 @@ def create_order():
     except Exception as e:
         return jsonify({'error': 'Internal server error', 'details': str(e)}), 500
 
+@app.route('/api/camera/status')
+def get_camera_status():
+    """Get the status of the Raspberry Pi camera"""
+    try:
+        response = requests.get(f"{RASPBERRY_PI_URL}/camera/status")
+        return jsonify(response.json()), response.status_code
+    except requests.RequestException as e:
+        return jsonify({
+            'error': 'Failed to connect to camera service',
+            'details': str(e)
+        }), 503
+
+@app.route('/api/camera/start', methods=['POST'])
+def start_camera():
+    """Start the Raspberry Pi camera"""
+    try:
+        response = requests.post(f"{RASPBERRY_PI_URL}/camera/start")
+        return jsonify(response.json()), response.status_code
+    except requests.RequestException as e:
+        return jsonify({
+            'error': 'Failed to start camera',
+            'details': str(e)
+        }), 503
+
+@app.route('/api/camera/stop', methods=['POST'])
+def stop_camera():
+    """Stop the Raspberry Pi camera"""
+    try:
+        response = requests.post(f"{RASPBERRY_PI_URL}/camera/stop")
+        return jsonify(response.json()), response.status_code
+    except requests.RequestException as e:
+        return jsonify({
+            'error': 'Failed to stop camera',
+            'details': str(e)
+        }), 503
+
+@app.route('/api/camera/last-qr')
+def get_last_scanned_qr():
+    """Get the last QR code scanned by the camera"""
+    try:
+        response = requests.get(f"{RASPBERRY_PI_URL}/camera/last-qr")
+        return jsonify(response.json()), response.status_code
+    except requests.RequestException as e:
+        return jsonify({
+            'error': 'Failed to get last QR code',
+            'details': str(e)
+        }), 503
+
+@app.route('/api/camera/stream-url')
+def get_camera_stream_url():
+    """Get the URL for the camera stream"""
+    try:
+        # Test if camera is accessible
+        status_response = requests.get(f"{RASPBERRY_PI_URL}/camera/status")
+        if status_response.status_code == 200:
+            camera_status = status_response.json()
+            if camera_status.get('camera_running', False):
+                return jsonify({
+                    'stream_url': f"{RASPBERRY_PI_URL}/video_feed",
+                    'status': 'active'
+                })
+            else:
+                return jsonify({
+                    'error': 'Camera is not running',
+                    'status': 'inactive'
+                }), 400
+    except requests.RequestException as e:
+        return jsonify({
+            'error': 'Failed to connect to camera service',
+            'details': str(e)
+        }), 503
+
+@app.route('/api/system/status')
+def get_full_system_status():
+    """Get status of all system components including camera"""
+    try:
+        # Get camera status
+        camera_response = requests.get(f"{RASPBERRY_PI_URL}/camera/status", timeout=2)
+        camera_status = camera_response.json() if camera_response.ok else {'error': 'Camera service unavailable'}
+        
+        # Get printer status
+        printer_response = requests.get(f"{RASPBERRY_PI_URL}/", timeout=2)
+        printer_status = printer_response.json() if printer_response.ok else {'error': 'Printer service unavailable'}
+        
+        # Combine with existing system status
+        system_status = {
+            "conveyor_belt": "running",
+            "sorting_arms": "operational",
+            "sensors": "active",
+            "esp32_connection": "connected",
+            "raspberry_pi": "healthy" if camera_response.ok and printer_response.ok else "issues detected",
+            "temperature": random.randint(20, 30),
+            "humidity": random.randint(40, 60),
+            "uptime": "2 days, 14 hours",
+            "camera_system": camera_status,
+            "printer_system": printer_status
+        }
+        
+        return jsonify(system_status)
+    except requests.RequestException as e:
+        return jsonify({
+            'error': 'Failed to get complete system status',
+            'details': str(e)
+        }), 503
+
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
