@@ -37,7 +37,7 @@ const Orders = () => {
 
   const fetchOrders = async () => {
     try {
-      const response = await axios.get('http://localhost:5000/api/orders');
+      const response = await axios.get('http://192.168.100.61:5000/api/orders');
       setOrders(response.data);
       setLoading(false);
     } catch (error) {
@@ -53,7 +53,7 @@ const Orders = () => {
 
   const handlePrintQRCode = async (orderId) => {
     try {
-      const response = await axios.post('http://localhost:5000/api/print-qr', {
+      const response = await axios.post('http://192.168.100.61:5000/api/print-qr', {
         orderId: orderId.toString()
       });
       

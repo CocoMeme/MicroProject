@@ -39,7 +39,7 @@ const Products = () => {
 
   const fetchProducts = async () => {
     try {
-      const response = await axios.get('http://localhost:5000/api/products');
+      const response = await axios.get('http://192.168.100.61:5000/api/products');
       setProducts(response.data);
     } catch (error) {
       console.error('Error fetching products:', error);
@@ -82,7 +82,7 @@ const Products = () => {
         productId: selectedProduct.id
       };
 
-      const response = await axios.post('http://localhost:5000/api/orders', orderData);
+      const response = await axios.post('http://192.168.100.61:5000/api/orders', orderData);
       setSnackbar({
         open: true,
         message: 'Order placed successfully!',
