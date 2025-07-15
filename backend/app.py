@@ -1,5 +1,6 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+from flask_socketio import SocketIO, emit
 import time
 import random
 from datetime import datetime
@@ -8,11 +9,16 @@ import os
 import sqlite3
 from dotenv import load_dotenv
 from products_data import products_data
+import threading
 
 load_dotenv()
 
 app = Flask(__name__)
+app.config['SECRET_KEY'] = 'your-secret-key'  # Change this to a secure secret key
 CORS(app)  # Enable CORS for all routes
+
+# Initialize SocketIO with CORS enabled
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 # Database setup
 def init_db():
@@ -32,6 +38,21 @@ def init_db():
             status TEXT NOT NULL
         )
     ''')
+    
+    # Create QR scans table to store scan history
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS qr_scans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            qr_data TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            device TEXT NOT NULL,
+            is_valid BOOLEAN NOT NULL,
+            order_id INTEGER,
+            validation_message TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
     conn.commit()
     conn.close()
 
@@ -128,6 +149,71 @@ def get_system_status():
         "humidity": random.randint(40, 60),
         "uptime": "2 days, 14 hours"
     })
+
+@app.route('/api/qr-scans', methods=['POST'])
+def receive_qr_scans():
+    """Receive QR scan data from Raspberry Pi"""
+    try:
+        data = request.get_json()
+        scans = data.get('scans', [])
+        
+        if not scans:
+            return jsonify({'error': 'No scan data provided'}), 400
+        
+        conn = sqlite3.connect('database.db')
+        c = conn.cursor()
+        
+        # Store each scan in the database
+        for scan in scans:
+            validation = scan.get('validation', {})
+            c.execute('''
+                INSERT INTO qr_scans (
+                    qr_data, timestamp, device, is_valid, 
+                    order_id, validation_message
+                ) VALUES (?, ?, ?, ?, ?, ?)
+            ''', (
+                scan.get('qr_data'),
+                scan.get('timestamp'),
+                scan.get('device', 'unknown'),
+                validation.get('valid', False),
+                validation.get('order_id'),
+                validation.get('message', '')
+            ))
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            'message': f'Successfully stored {len(scans)} scan records',
+            'count': len(scans)
+        }), 200
+        
+    except Exception as e:
+        return jsonify({'error': 'Internal server error', 'details': str(e)}), 500
+
+@app.route('/api/qr-scans', methods=['GET'])
+def get_qr_scans():
+    """Get QR scan history"""
+    try:
+        limit = request.args.get('limit', 50, type=int)
+        
+        conn = sqlite3.connect('database.db')
+        conn.row_factory = dict_factory
+        c = conn.cursor()
+        
+        c.execute('''
+            SELECT * FROM qr_scans 
+            ORDER BY created_at DESC 
+            LIMIT ?
+        ''', (limit,))
+        
+        scans = c.fetchall()
+        conn.close()
+        
+        return jsonify(scans), 200
+        
+    except Exception as e:
+        return jsonify({'error': 'Internal server error', 'details': str(e)}), 500
 
 @app.route('/api/print-qr', methods=['POST'])
 def print_qr_code():
@@ -382,5 +468,143 @@ def get_full_system_status():
             'details': str(e)
         }), 503
 
+# WebSocket event handlers
+@socketio.on('connect')
+def handle_connect():
+    print('Client connected')
+    emit('status', {'message': 'Connected to server'})
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    print('Client disconnected')
+
+@socketio.on('start_camera_stream')
+def handle_start_camera(data=None):
+    """Start camera and begin streaming QR code data"""
+    try:
+        # Start camera via HTTP request to Raspberry Pi
+        response = requests.post(f"{RASPBERRY_PI_URL}/camera/start", timeout=5)
+        if response.ok:
+            emit('camera_status', {'status': 'started'})
+            # Start background thread for QR code polling
+            socketio.start_background_task(qr_polling_task)
+        else:
+            emit('camera_error', {'error': 'Failed to start camera'})
+    except requests.RequestException as e:
+        emit('camera_error', {'error': f'Failed to connect to camera: {str(e)}'})
+
+@socketio.on('stop_camera_stream')
+def handle_stop_camera(data=None):
+    """Stop camera streaming"""
+    try:
+        response = requests.post(f"{RASPBERRY_PI_URL}/camera/stop", timeout=5)
+        if response.ok:
+            emit('camera_status', {'status': 'stopped'})
+        else:
+            emit('camera_error', {'error': 'Failed to stop camera'})
+    except requests.RequestException as e:
+        emit('camera_error', {'error': f'Failed to connect to camera: {str(e)}'})
+
+@socketio.on('get_system_status')
+def handle_get_system_status(data=None):
+    """Get current system status and emit to client"""
+    try:
+        # Get camera status
+        camera_response = requests.get(f"{RASPBERRY_PI_URL}/camera/status", timeout=2)
+        camera_status = camera_response.json() if camera_response.ok else {'error': 'Camera service unavailable'}
+        
+        system_status = {
+            "conveyor_belt": "running",
+            "sorting_arms": "operational", 
+            "sensors": "active",
+            "esp32_connection": "connected",
+            "raspberry_pi": "healthy" if camera_response.ok else "issues detected",
+            "temperature": random.randint(20, 30),
+            "humidity": random.randint(40, 60),
+            "uptime": "2 days, 14 hours",
+            "camera_system": camera_status
+        }
+        
+        emit('system_status', system_status)
+    except requests.RequestException as e:
+        emit('system_status', {
+            'error': 'Failed to get system status',
+            'details': str(e)
+        })
+
+@socketio.on('test_message')
+def handle_test_message(data=None):
+    """Handle test messages from clients"""
+    print(f'Received test message: {data}')
+    emit('test_response', {
+        'message': f'Server received: {data.get("message", "No message") if data else "No data"}',
+        'timestamp': datetime.now().isoformat()
+    })
+
+def qr_polling_task():
+    """Background task to poll for QR codes and emit to clients"""
+    last_qr_data = None
+    while True:
+        try:
+            response = requests.get(f"{RASPBERRY_PI_URL}/camera/last-qr", timeout=2)
+            if response.ok:
+                data = response.json()
+                if data.get('last_qr_data') and data['last_qr_data'] != last_qr_data:
+                    last_qr_data = data['last_qr_data']
+                    socketio.emit('qr_detected', {
+                        'data': last_qr_data,
+                        'timestamp': datetime.now().isoformat(),
+                        'type': 'QR Code'
+                    })
+            time.sleep(1)  # Poll every second
+        except requests.RequestException:
+            # If we can't connect to camera, stop polling
+            break
+        except Exception as e:
+            print(f"Error in QR polling: {e}")
+            break
+
+@app.route('/api/validate-qr', methods=['POST'])
+def validate_qr_code():
+    """Validate QR code against orders database"""
+    try:
+        data = request.get_json()
+        qr_data = data.get('qr_data')
+        
+        if not qr_data:
+            return jsonify({'error': 'No QR data provided'}), 400
+        
+        conn = sqlite3.connect('database.db')
+        conn.row_factory = dict_factory
+        c = conn.cursor()
+        
+        # Check if QR data matches any order number
+        c.execute('SELECT * FROM orders WHERE order_number = ?', (qr_data,))
+        order = c.fetchone()
+        
+        conn.close()
+        
+        if order:
+            return jsonify({
+                'valid': True,
+                'order_id': order['id'],
+                'order_number': order['order_number'],
+                'customer_name': order['customer_name'],
+                'product_name': order['product_name'],
+                'status': order['status'],
+                'amount': order['amount']
+            }), 200
+        else:
+            return jsonify({
+                'valid': False, 
+                'message': 'QR code not found in orders database'
+            }), 200
+            
+    except Exception as e:
+        return jsonify({
+            'valid': False, 
+            'message': f'Database error: {str(e)}'
+        }), 500
+
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    socketio.run(app, debug=True, host='0.0.0.0', port=5000)

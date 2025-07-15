@@ -1,4 +1,6 @@
 flask==3.0.0
+flask-socketio==5.3.6
+flask-cors==4.0.0
 pillow==10.0.0
 qrcode==7.4.2
 python-dotenv==1.0.0

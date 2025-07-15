@@ -208,6 +208,21 @@ def get_last_qr():
             'details': str(e)
         }), 500
 
+@app.route('/camera/qr-history')
+def get_qr_history():
+    """Get the history of scanned QR codes"""
+    try:
+        history = camera.get_qr_history()
+        return jsonify({
+            'qr_history': history
+        })
+    except Exception as e:
+        logger.error(f"Error getting QR history: {str(e)}")
+        return jsonify({
+            'error': 'Failed to get QR history',
+            'details': str(e)
+        }), 500
+
 if __name__ == '__main__':
     # Check printer availability at startup
     if printer.check_printer():
@@ -215,12 +230,14 @@ if __name__ == '__main__':
     else:
         logger.warning("Printer is not available - please check connection")
     
-    # Try to start the camera at startup
+    # Auto-start the camera at startup
     try:
-        camera.start_camera()
-        logger.info("Camera started at startup")
+        if camera.start_camera():
+            logger.info("Camera auto-started at startup")
+        else:
+            logger.warning("Camera failed to auto-start at startup")
     except Exception as e:
-        logger.warning(f"Failed to start camera at startup: {str(e)}")
+        logger.warning(f"Failed to auto-start camera at startup: {str(e)}")
     
     # Run the server
-    app.run(host='0.0.0.0', port=5001, debug=False) 
+    app.run(host='0.0.0.0', port=5001, debug=False)

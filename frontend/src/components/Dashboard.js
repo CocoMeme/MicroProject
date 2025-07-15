@@ -11,7 +11,7 @@ import SystemStatus from './SystemStatus';
 import RecentParcels from './RecentParcels';
 import ParcelChart from './ParcelChart';
 
-const API_BASE_URL = 'http://localhost:5000/api';
+const API_BASE_URL = 'http://192.168.100.61:5000/api';
 
 function Dashboard() {
   const [dashboardData, setDashboardData] = useState(null);
