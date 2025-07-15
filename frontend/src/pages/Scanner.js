@@ -8,10 +8,18 @@ import {
   Alert,
   Chip,
   CircularProgress,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  List,
+  ListItem,
+  ListItemText,
+  Divider,
 } from '@mui/material';
 import QrCodeScannerIcon from '@mui/icons-material/QrCodeScanner';
-import PlayArrowIcon from '@mui/icons-material/PlayArrow';
-import StopIcon from '@mui/icons-material/Stop';
+import HistoryIcon from '@mui/icons-material/History';
+import QrCodeIcon from '@mui/icons-material/QrCode';
 import WifiIcon from '@mui/icons-material/Wifi';
 import WifiOffIcon from '@mui/icons-material/WifiOff';
 import websocketService from '../services/websocketService';
@@ -21,13 +29,15 @@ const BACKEND_SERVER = 'http://192.168.100.61:5000'; // Your Flask backend
 
 export default function Scanner() {
   const [isStreaming, setIsStreaming] = useState(true); // Auto-start camera
-  const [lastScan, setLastScan] = useState(null);
   const [qrHistory, setQrHistory] = useState([]);
   const [error, setError] = useState(null);
   const [status, setStatus] = useState({ online: false, camera_running: false });
   const [wsConnected, setWsConnected] = useState(false);
   const [connectionInfo, setConnectionInfo] = useState(null);
   const [isConnecting, setIsConnecting] = useState(false);
+  
+  // Modal states
+  const [historyModalOpen, setHistoryModalOpen] = useState(false);
 
   // WebSocket event handlers
   const handleCameraStatus = useCallback((data) => {
@@ -45,12 +55,33 @@ export default function Scanner() {
   }, []);
 
   const handleQRDetected = useCallback((data) => {
-    setLastScan({
-      data: data.data,
-      timestamp: new Date(data.timestamp).toLocaleString(),
-      type: data.type || 'QR Code',
-      validation: data.validation || { valid: false, message: 'Unknown validation status' }
-    });
+    console.log('QR detected via WebSocket:', data); // Debug log
+    
+    // Immediately refresh QR history when new scan is detected
+    getQRHistory();
+  }, []);
+
+  const handleQRHistoryUpdated = useCallback((data) => {
+    console.log('QR history updated via WebSocket:', data); // Debug log
+    if (data.history) {
+      setQrHistory(prevHistory => {
+        // Merge new history with existing, removing duplicates
+        const combined = [...data.history];
+        const existingKeys = new Set(data.history.map(h => `${h.qr_data}-${h.timestamp}`));
+        
+        // Add any existing items that aren't in the new data
+        const additionalItems = prevHistory.filter(h => 
+          !existingKeys.has(`${h.qr_data}-${h.timestamp}`)
+        );
+        
+        combined.push(...additionalItems);
+        
+        // Sort by timestamp and limit to 20 items
+        return combined
+          .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+          .slice(0, 20);
+      });
+    }
   }, []);
 
   const handleSystemStatus = useCallback((data) => {
@@ -96,9 +127,10 @@ export default function Scanner() {
       websocketService.off('camera_status', handleCameraStatus);
       websocketService.off('camera_error', handleCameraError);
       websocketService.off('qr_detected', handleQRDetected);
+      websocketService.off('qr_history_updated', handleQRHistoryUpdated);
       websocketService.off('system_status', handleSystemStatus);
     };
-  }, [handleCameraStatus, handleCameraError, handleQRDetected, handleSystemStatus]);
+  }, [handleCameraStatus, handleCameraError, handleQRDetected, handleQRHistoryUpdated, handleSystemStatus]);
 
   // Set up WebSocket event listeners
   useEffect(() => {
@@ -106,6 +138,7 @@ export default function Scanner() {
       websocketService.on('camera_status', handleCameraStatus);
       websocketService.on('camera_error', handleCameraError);
       websocketService.on('qr_detected', handleQRDetected);
+      websocketService.on('qr_history_updated', handleQRHistoryUpdated);
       websocketService.on('system_status', handleSystemStatus);
 
       // Get initial system status
@@ -127,7 +160,6 @@ export default function Scanner() {
       let qrInterval;
       let historyInterval;
       if (isStreaming) {
-        qrInterval = setInterval(getLastQR, 1000);
         historyInterval = setInterval(getQRHistory, 5000); // Refresh history every 5 seconds
       }
 
@@ -137,7 +169,7 @@ export default function Scanner() {
         if (historyInterval) clearInterval(historyInterval);
       };
     }
-  }, [wsConnected, isStreaming, handleCameraStatus, handleCameraError, handleQRDetected, handleSystemStatus]);
+  }, [wsConnected, isStreaming, handleCameraStatus, handleCameraError, handleQRDetected, handleQRHistoryUpdated, handleSystemStatus]);
 
   // Auto-start camera on component mount
   useEffect(() => {
@@ -200,10 +232,23 @@ export default function Scanner() {
 
   const getQRHistory = async () => {
     try {
+      console.log('Fetching QR history...'); // Debug log
       // Get QR history from both Raspberry Pi (local) and main backend (stored)
       const [raspiResponse, backendResponse] = await Promise.allSettled([
-        fetch(`${RASPI_SERVER}/camera/qr-history`),
-        fetch(`${BACKEND_SERVER}/api/qr-scans?limit=20`)
+        fetch(`${RASPI_SERVER}/camera/qr-history`, {
+          cache: 'no-cache',
+          headers: {
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache'
+          }
+        }),
+        fetch(`${BACKEND_SERVER}/api/qr-scans?limit=50`, {
+          cache: 'no-cache',
+          headers: {
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache'
+          }
+        })
       ]);
       
       let combinedHistory = [];
@@ -211,14 +256,18 @@ export default function Scanner() {
       // Add Raspberry Pi local history
       if (raspiResponse.status === 'fulfilled' && raspiResponse.value.ok) {
         const raspiData = await raspiResponse.value.json();
+        console.log('Raspi QR history:', raspiData); // Debug log
         if (raspiData.qr_history) {
           combinedHistory = [...raspiData.qr_history];
         }
+      } else {
+        console.log('Failed to fetch Raspi QR history:', raspiResponse); // Debug log
       }
       
       // Add backend stored history
       if (backendResponse.status === 'fulfilled' && backendResponse.value.ok) {
         const backendData = await backendResponse.value.json();
+        console.log('Backend QR history:', backendData); // Debug log
         if (Array.isArray(backendData)) {
           // Convert backend format to match frontend format
           const backendHistory = backendData.map(scan => ({
@@ -240,49 +289,17 @@ export default function Scanner() {
           
           combinedHistory = [...combinedHistory, ...newBackendHistory];
         }
+      } else {
+        console.log('Failed to fetch backend QR history:', backendResponse); // Debug log
       }
       
       // Sort by timestamp (newest first)
       combinedHistory.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
       
+      console.log('Final combined history:', combinedHistory); // Debug log
       setQrHistory(combinedHistory.slice(0, 20)); // Keep only latest 20
     } catch (err) {
       console.error('Failed to get QR history:', err);
-    }
-  };
-
-  const getLastQR = async () => {
-    try {
-      const response = await fetch(`${RASPI_SERVER}/camera/last-qr`);
-      const data = await response.json();
-      if (data.last_qr_data && (!lastScan || data.last_qr_data !== lastScan.data)) {
-        // Try to validate the QR code against backend
-        let validation = { valid: false, message: 'Validation pending...' };
-        try {
-          const validationResponse = await fetch(`${BACKEND_SERVER}/api/validate-qr`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ qr_data: data.last_qr_data })
-          });
-          if (validationResponse.ok) {
-            validation = await validationResponse.json();
-          }
-        } catch (validationError) {
-          console.error('Validation error:', validationError);
-        }
-
-        setLastScan({
-          data: data.last_qr_data,
-          timestamp: new Date().toLocaleString(),
-          type: 'QR Code',
-          validation: validation
-        });
-        
-        // Refresh QR history when new scan is detected
-        getQRHistory();
-      }
-    } catch (err) {
-      console.error('Failed to get last QR code:', err);
     }
   };
 
@@ -452,93 +469,56 @@ export default function Scanner() {
         </Grid>
 
         <Grid item xs={12} md={4}>
+          {/* Action Buttons */}
           <Paper sx={{ p: 3, mb: 3 }}>
             <Typography variant="h6" gutterBottom>
-              Last Scan
+              QR Code Actions
             </Typography>
-            {lastScan ? (
-              <Box>
-                <Typography variant="body1" sx={{ mb: 1 }}>
-                  Data: {lastScan.data}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Type: {lastScan.type}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Time: {lastScan.timestamp}
-                </Typography>
-                {lastScan.validation && (
-                  <Box sx={{ mt: 1 }}>
-                    <Chip
-                      label={lastScan.validation.valid ? 'Valid' : 'Not Valid'}
-                      color={lastScan.validation.valid ? 'success' : 'error'}
-                      size="small"
-                    />
-                    {lastScan.validation.valid && lastScan.validation.order_number && (
-                      <Typography variant="caption" color="success.main" sx={{ display: 'block', mt: 0.5 }}>
-                        Order: {lastScan.validation.order_number}
-                      </Typography>
-                    )}
-                    {!lastScan.validation.valid && lastScan.validation.message && (
-                      <Typography variant="caption" color="error.main" sx={{ display: 'block', mt: 0.5 }}>
-                        {lastScan.validation.message}
-                      </Typography>
-                    )}
-                  </Box>
-                )}
-              </Box>
-            ) : (
-              <Typography color="text.secondary">No QR codes scanned yet</Typography>
-            )}
-          </Paper>
-
-          {/* QR History Panel */}
-          <Paper sx={{ p: 3, mb: 3 }}>
-            <Typography variant="h6" gutterBottom>
-              Scan History ({qrHistory.length})
-            </Typography>
-            <Box sx={{ maxHeight: 300, overflowY: 'auto' }}>
-              {qrHistory.length > 0 ? (
-                qrHistory.slice(0, 15).map((scan, index) => (
-                  <Box key={index} sx={{ mb: 1, p: 1, border: '1px solid #eee', borderRadius: 1 }}>
-                    <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
-                      {scan.qr_data}
-                    </Typography>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 0.5 }}>
-                      <Typography variant="caption" color="text.secondary">
-                        {new Date(scan.timestamp).toLocaleTimeString()}
-                      </Typography>
-                      <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
-                        <Chip
-                          label={scan.device || 'unknown'}
-                          size="small"
-                          variant="outlined"
-                          color="info"
-                          sx={{ fontSize: '0.6rem', height: 18 }}
-                        />
-                        <Chip
-                          label={scan.validation.valid ? 'Valid' : 'Not Valid'}
-                          color={scan.validation.valid ? 'success' : 'error'}
-                          size="small"
-                          variant="outlined"
-                        />
-                      </Box>
-                    </Box>
-                    {scan.validation.valid && scan.validation.order_number && (
-                      <Typography variant="caption" color="success.main">
-                        Order: {scan.validation.order_number}
-                      </Typography>
-                    )}
-                    {!scan.validation.valid && scan.validation.message && (
-                      <Typography variant="caption" color="error.main">
-                        {scan.validation.message}
-                      </Typography>
-                    )}
-                  </Box>
-                ))
-              ) : (
-                <Typography color="text.secondary">No scans in history</Typography>
-              )}
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <Button
+                variant="contained"
+                startIcon={<HistoryIcon />}
+                onClick={() => setHistoryModalOpen(true)}
+                disabled={qrHistory.length === 0}
+                fullWidth
+              >
+                View Scan History ({qrHistory.length})
+              </Button>
+              <Button
+                variant="outlined"
+                onClick={() => {
+                  console.log('Force refreshing QR history...');
+                  getQRHistory();
+                }}
+                fullWidth
+                sx={{ mt: 1 }}
+              >
+                Force Refresh History
+              </Button>
+              <Button
+                variant="outlined"
+                onClick={async () => {
+                  try {
+                    const response = await fetch(`${RASPI_SERVER}/debug/test-qr-image`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ qr_code: 'ORD-001' })
+                    });
+                    if (response.ok) {
+                      console.log('Test QR image created');
+                      // History will update via WebSocket
+                    } else {
+                      console.error('Failed to create test QR image');
+                    }
+                  } catch (err) {
+                    console.error('Error creating test QR image:', err);
+                  }
+                }}
+                fullWidth
+                sx={{ mt: 1 }}
+              >
+                Test QR Image
+              </Button>
             </Box>
           </Paper>
 
@@ -586,8 +566,180 @@ export default function Scanner() {
               </Box>
             </Box>
           </Paper>
+
+          {/* Latest Scan Display */}
+          {qrHistory.length > 0 && (
+            <Paper sx={{ p: 3 }}>
+              <Typography variant="h6" gutterBottom>
+                Latest Scan
+              </Typography>
+              <Box>
+                <Typography variant="body1" gutterBottom>
+                  <strong>Order ID:</strong> {qrHistory[0].validation?.valid && qrHistory[0].validation?.order_number 
+                    ? qrHistory[0].validation.order_number 
+                    : qrHistory[0].validation?.valid && qrHistory[0].qr_data
+                    ? qrHistory[0].qr_data
+                    : 'Invalid QR Code'
+                  }
+                </Typography>
+                
+                {/* Display QR Image if available */}
+                {qrHistory[0].image_data && qrHistory[0].image_data.base64 && (
+                  <Box sx={{ mb: 2, textAlign: 'center' }}>
+                    <Paper sx={{ p: 1, bgcolor: 'grey.50', display: 'inline-block' }}>
+                      <img 
+                        src={`data:image/jpeg;base64,${qrHistory[0].image_data.base64}`}
+                        alt="Latest QR Code"
+                        style={{ 
+                          maxWidth: '150px', 
+                          maxHeight: '150px',
+                          border: '1px solid #ddd',
+                          borderRadius: '4px'
+                        }}
+                      />
+                    </Paper>
+                  </Box>
+                )}
+                
+                <Typography variant="body2" color="text.secondary" gutterBottom>
+                  <strong>QR Data:</strong> {qrHistory[0].qr_data}
+                </Typography>
+                <Typography variant="body2" color="text.secondary" gutterBottom>
+                  <strong>Scanned:</strong> {new Date(qrHistory[0].timestamp).toLocaleString()}
+                </Typography>
+                <Box sx={{ mt: 1 }}>
+                  <Chip
+                    label={qrHistory[0].validation?.valid ? 'Valid' : 'Not Valid'}
+                    color={qrHistory[0].validation?.valid ? 'success' : 'error'}
+                    size="small"
+                  />
+                  <Chip
+                    label={qrHistory[0].device || 'unknown'}
+                    size="small"
+                    variant="outlined"
+                    color="info"
+                    sx={{ ml: 1 }}
+                  />
+                </Box>
+              </Box>
+            </Paper>
+          )}
         </Grid>
       </Grid>
+
+      {/* History Modal */}
+      <Dialog open={historyModalOpen} onClose={() => setHistoryModalOpen(false)} maxWidth="md" fullWidth>
+        <DialogTitle>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <HistoryIcon />
+            QR Code Scan History ({qrHistory.length})
+          </Box>
+        </DialogTitle>
+        <DialogContent sx={{ p: 0 }}>
+          <List sx={{ maxHeight: 400, overflow: 'auto' }}>
+            {qrHistory.map((scan, index) => (
+              <div key={index}>
+                <ListItem sx={{ py: 2 }}>
+                  <ListItemText
+                    primary={
+                      <Box>
+                        <Typography variant="h6" gutterBottom>
+                          Order ID: {scan.validation?.valid && scan.validation?.order_number 
+                            ? scan.validation.order_number 
+                            : scan.validation?.valid && scan.qr_data
+                            ? scan.qr_data
+                            : 'Invalid QR Code'
+                          }
+                        </Typography>
+                        
+                        {/* QR Code Image */}
+                        {scan.image_data && scan.image_data.base64 && (
+                          <Box sx={{ mb: 2, textAlign: 'center' }}>
+                            <Typography variant="body2" color="text.secondary" gutterBottom>
+                              QR Code Image:
+                            </Typography>
+                            <Paper sx={{ p: 1, bgcolor: 'grey.50', display: 'inline-block' }}>
+                              <img 
+                                src={`data:image/jpeg;base64,${scan.image_data.base64}`}
+                                alt="QR Code"
+                                style={{ 
+                                  maxWidth: '200px', 
+                                  maxHeight: '200px',
+                                  border: '1px solid #ddd',
+                                  borderRadius: '4px'
+                                }}
+                              />
+                            </Paper>
+                          </Box>
+                        )}
+                        
+                        <Typography variant="body2" color="text.secondary" gutterBottom>
+                          QR Code Data:
+                        </Typography>
+                        <Paper sx={{ p: 1, bgcolor: 'grey.50', mb: 1 }}>
+                          <Typography 
+                            variant="body1" 
+                            sx={{ 
+                              fontFamily: 'monospace',
+                              wordBreak: 'break-all'
+                            }}
+                          >
+                            {scan.qr_data}
+                          </Typography>
+                        </Paper>
+                      </Box>
+                    }
+                    secondary={
+                      <Box sx={{ mt: 1 }}>
+                        <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 1 }}>
+                          <Chip
+                            label={scan.validation?.valid ? 'Valid' : 'Not Valid'}
+                            color={scan.validation?.valid ? 'success' : 'error'}
+                            size="small"
+                          />
+                          <Chip
+                            label={scan.device || 'unknown'}
+                            size="small"
+                            variant="outlined"
+                            color="info"
+                          />
+                        </Box>
+                        <Typography variant="caption" color="text.secondary">
+                          Scanned: {new Date(scan.timestamp).toLocaleString()}
+                        </Typography>
+                        {scan.validation?.valid && scan.validation?.customer_name && (
+                          <Typography variant="caption" color="success.main" sx={{ display: 'block' }}>
+                            Customer: {scan.validation.customer_name}
+                          </Typography>
+                        )}
+                        {scan.validation?.valid && scan.validation?.product_name && (
+                          <Typography variant="caption" color="success.main" sx={{ display: 'block' }}>
+                            Product: {scan.validation.product_name}
+                          </Typography>
+                        )}
+                        {!scan.validation?.valid && scan.validation?.message && (
+                          <Typography variant="caption" color="error.main" sx={{ display: 'block' }}>
+                            {scan.validation.message}
+                          </Typography>
+                        )}
+                      </Box>
+                    }
+                  />
+                </ListItem>
+                {index < qrHistory.length - 1 && <Divider />}
+              </div>
+            ))}
+            {qrHistory.length === 0 && (
+              <ListItem>
+                <ListItemText primary="No scan history available" />
+              </ListItem>
+            )}
+          </List>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setHistoryModalOpen(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }
