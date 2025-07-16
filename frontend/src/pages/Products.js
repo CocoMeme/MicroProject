@@ -30,6 +30,7 @@ const Products = () => {
   const [formData, setFormData] = useState({
     customerName: '',
     email: '',
+    contactNumber: '',
     address: ''
   });
 
@@ -62,6 +63,7 @@ const Products = () => {
     setFormData({
       customerName: '',
       email: '',
+      contactNumber: '',
       address: ''
     });
   };
@@ -160,6 +162,9 @@ const Products = () => {
                   <Typography variant="h6" color="primary" sx={{ mt: 2 }}>
                     {product.price}
                   </Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                    Support: {product.contact_number || '+63 912 345 6789'}
+                  </Typography>
                 </CardContent>
                 <Box sx={{ p: 2 }}>
                   <Button
@@ -208,6 +213,18 @@ const Products = () => {
                     type="email"
                     value={formData.email}
                     onChange={handleInputChange}
+                  />
+                </Grid>
+                <Grid item xs={12}>
+                  <TextField
+                    required
+                    fullWidth
+                    label="Contact Number"
+                    name="contactNumber"
+                    type="tel"
+                    value={formData.contactNumber}
+                    onChange={handleInputChange}
+                    placeholder="+63 912 345 6789"
                   />
                 </Grid>
                 <Grid item xs={12}>

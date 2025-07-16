@@ -30,6 +30,7 @@ def init_db():
             order_number TEXT NOT NULL,
             customer_name TEXT NOT NULL,
             email TEXT NOT NULL,
+            contact_number TEXT NOT NULL,
             address TEXT NOT NULL,
             product_id TEXT NOT NULL,
             product_name TEXT NOT NULL,
@@ -56,8 +57,33 @@ def init_db():
     conn.commit()
     conn.close()
 
+def migrate_database():
+    """Add contact_number column to existing orders table if it doesn't exist"""
+    try:
+        conn = sqlite3.connect('database.db')
+        c = conn.cursor()
+        
+        # Check if contact_number column exists
+        c.execute("PRAGMA table_info(orders)")
+        columns = [column[1] for column in c.fetchall()]
+        
+        if 'contact_number' not in columns:
+            print("Adding contact_number column to orders table...")
+            c.execute('ALTER TABLE orders ADD COLUMN contact_number TEXT DEFAULT "N/A"')
+            conn.commit()
+            print("Database migration completed successfully.")
+        else:
+            print("Database is already up to date.")
+            
+        conn.close()
+    except Exception as e:
+        print(f"Database migration failed: {e}")
+
 # Initialize database
 init_db()
+
+# Run database migration
+migrate_database()
 
 # Helper function to convert row to dictionary
 def dict_factory(cursor, row):
@@ -242,6 +268,7 @@ def print_qr_code():
             'date': order_data['date'],
             'status': order_data['status'],
             'email': order_data['email'],
+            'contactNumber': order_data.get('contact_number', 'N/A'),
             'address': order_data['address'],
             'productName': order_data['product_name'],
             'amount': f"₱{order_data['amount']:.2f}",
@@ -305,7 +332,7 @@ def get_orders():
 def create_order():
     try:
         data = request.get_json()
-        required_fields = ['customerName', 'email', 'address', 'productId']
+        required_fields = ['customerName', 'email', 'contactNumber', 'address', 'productId']
 
         # Validate required fields
         for field in required_fields:
@@ -329,13 +356,14 @@ def create_order():
         # Insert new order
         c.execute('''
             INSERT INTO orders (
-                order_number, customer_name, email, address,
+                order_number, customer_name, email, contact_number, address,
                 product_id, product_name, amount, date, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             new_order_number,
             data['customerName'],
             data['email'],
+            data['contactNumber'],
             data['address'],
             data['productId'],
             product['name'],

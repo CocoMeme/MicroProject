@@ -122,6 +122,7 @@ const Orders = () => {
                 <TableCell>Order Number</TableCell>
                 <TableCell>Customer Name</TableCell>
                 <TableCell>Email</TableCell>
+                <TableCell>Contact</TableCell>
                 <TableCell>Product</TableCell>
                 <TableCell>Amount</TableCell>
                 <TableCell>Date</TableCell>
@@ -137,6 +138,7 @@ const Orders = () => {
                     <TableCell>{order.order_number}</TableCell>
                     <TableCell>{order.customer_name}</TableCell>
                     <TableCell>{order.email}</TableCell>
+                    <TableCell>{order.contact_number || 'N/A'}</TableCell>
                     <TableCell>{order.product_name}</TableCell>
                     <TableCell>₱{order.amount.toFixed(2)}</TableCell>
                     <TableCell>
