@@ -3,6 +3,7 @@ from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from print import ReceiptPrinter
 from camera import CameraManager
+import paho.mqtt.client as mqtt
 import logging
 from datetime import datetime
 import threading
@@ -39,16 +40,110 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 printer = ReceiptPrinter()
 camera = CameraManager()
 
+# MQTT Listener Class
+class MQTTListener:
+    def __init__(self, broker_host="localhost", broker_port=1883):
+        self.broker_host = broker_host
+        self.broker_port = broker_port
+        self.client = mqtt.Client()
+        self.client.on_connect = self.on_connect
+        self.client.on_message = self.on_message
+        self.client.on_disconnect = self.on_disconnect
+        self.is_connected = False
+        
+    def on_connect(self, client, userdata, flags, rc):
+        if rc == 0:
+            logger.info("✅ MQTT: Connected to broker successfully!")
+            self.is_connected = True
+            client.subscribe("esp32/#")  # Subscribe to all ESP32-related topics
+            # Emit connection status via WebSocket
+            socketio.emit('mqtt_status', {
+                'status': 'connected',
+                'timestamp': datetime.now().isoformat()
+            })
+        else:
+            logger.error(f"❌ MQTT: Connection failed with code {rc}")
+            self.is_connected = False
+
+    def on_message(self, client, userdata, msg):
+        timestamp = datetime.now().strftime('%H:%M:%S')
+        message = msg.payload.decode()
+        logger.info(f"📨 MQTT [{timestamp}] {msg.topic} > {message}")
+        
+        # Log to file
+        try:
+            with open("mqtt_messages.log", "a") as f:
+                f.write(f"[{timestamp}] {msg.topic} > {message}\n")
+        except Exception as e:
+            logger.error(f"Failed to write MQTT log: {e}")
+        
+        # Emit MQTT message via WebSocket for real-time monitoring
+        socketio.emit('mqtt_message', {
+            'topic': msg.topic,
+            'message': message,
+            'timestamp': datetime.now().isoformat()
+        })
+
+    def on_disconnect(self, client, userdata, rc):
+        self.is_connected = False
+        if rc != 0:
+            logger.warning("🔌 MQTT: Disconnected. Will attempt to reconnect...")
+        else:
+            logger.info("🔌 MQTT: Disconnected gracefully.")
+        
+        # Emit disconnection status via WebSocket
+        socketio.emit('mqtt_status', {
+            'status': 'disconnected',
+            'timestamp': datetime.now().isoformat()
+        })
+
+    def start(self):
+        """Start the MQTT listener in a separate thread"""
+        def mqtt_loop():
+            try:
+                logger.info("🚀 MQTT Listener Starting...")
+                self.client.connect(self.broker_host, self.broker_port, 60)
+                self.client.loop_forever()  # Blocking loop that listens forever
+            except Exception as e:
+                logger.error(f"MQTT connection error: {e}")
+                self.is_connected = False
+        
+        mqtt_thread = threading.Thread(target=mqtt_loop, daemon=True)
+        mqtt_thread.start()
+        logger.info("MQTT listener thread started")
+        return mqtt_thread
+
+    def stop(self):
+        """Stop the MQTT listener"""
+        try:
+            self.client.disconnect()
+            logger.info("MQTT listener stopped")
+        except Exception as e:
+            logger.error(f"Error stopping MQTT listener: {e}")
+
+    def get_status(self):
+        """Get MQTT connection status"""
+        return {
+            'connected': self.is_connected,
+            'broker_host': self.broker_host,
+            'broker_port': self.broker_port
+        }
+
+# Initialize MQTT listener
+mqtt_listener = MQTTListener()
+
 @app.route('/status')
 def status():
     """General status endpoint"""
     try:
         printer_status = "available" if printer.check_printer() else "unavailable"
         camera_status = camera.get_status()
+        mqtt_status = mqtt_listener.get_status()
         return jsonify({
             "status": "running",
             "printer": printer_status,
             "camera": camera_status,
+            "mqtt": mqtt_status,
             "timestamp": datetime.now().isoformat()
         })
     except Exception as e:
@@ -56,6 +151,37 @@ def status():
         return jsonify({
             "status": "error",
             "error": str(e)
+        }), 500
+
+@app.route('/mqtt/status')
+def mqtt_status():
+    """Get MQTT listener status"""
+    try:
+        status = mqtt_listener.get_status()
+        return jsonify(status)
+    except Exception as e:
+        logger.error(f"Error getting MQTT status: {str(e)}")
+        return jsonify({
+            'error': 'Failed to get MQTT status',
+            'details': str(e)
+        }), 500
+
+@app.route('/mqtt/restart', methods=['POST'])
+def restart_mqtt():
+    """Restart MQTT listener"""
+    try:
+        mqtt_listener.stop()
+        time.sleep(1)  # Wait a moment before restarting
+        mqtt_listener.start()
+        return jsonify({
+            'message': 'MQTT listener restarted',
+            'status': mqtt_listener.get_status()
+        })
+    except Exception as e:
+        logger.error(f"Error restarting MQTT listener: {str(e)}")
+        return jsonify({
+            'error': 'Failed to restart MQTT listener',
+            'details': str(e)
         }), 500
 
 @app.after_request
@@ -71,10 +197,12 @@ def home():
     """Health check endpoint"""
     printer_status = "available" if printer.check_printer() else "unavailable"
     camera_status = camera.get_status()
+    mqtt_status = mqtt_listener.get_status()
     return jsonify({
         "status": "running",
         "printer": printer_status,
-        "camera": camera_status
+        "camera": camera_status,
+        "mqtt": mqtt_status
     })
 
 @app.route('/print-qr', methods=['POST'])
@@ -300,6 +428,7 @@ def periodic_status_broadcast():
         try:
             socketio.emit('system_status', {
                 'camera_system': camera.get_status(),
+                'mqtt_system': mqtt_listener.get_status(),
                 'timestamp': datetime.now().isoformat()
             })
         except Exception as e:
@@ -342,10 +471,31 @@ def handle_get_system_status():
     try:
         emit('system_status', {
             'camera_system': camera.get_status(),
+            'mqtt_system': mqtt_listener.get_status(),
             'timestamp': datetime.now().isoformat()
         })
     except Exception as e:
         emit('camera_error', {'error': str(e)})
+
+@socketio.on('get_mqtt_status')
+def handle_get_mqtt_status():
+    try:
+        emit('mqtt_status', mqtt_listener.get_status())
+    except Exception as e:
+        emit('mqtt_error', {'error': str(e)})
+
+@socketio.on('restart_mqtt')
+def handle_restart_mqtt():
+    try:
+        mqtt_listener.stop()
+        time.sleep(1)
+        mqtt_listener.start()
+        emit('mqtt_status', {
+            'status': 'restarted',
+            'details': mqtt_listener.get_status()
+        })
+    except Exception as e:
+        emit('mqtt_error', {'error': str(e)})
 
 @app.route('/debug/simulate-qr-scan', methods=['POST'])
 def simulate_qr_scan():
@@ -514,5 +664,13 @@ if __name__ == '__main__':
     status_thread.start()
     logger.info("Status broadcast thread started")
     
+    # Start MQTT listener at startup
+    try:
+        mqtt_listener.start()
+        logger.info("MQTT listener started at startup")
+    except Exception as e:
+        logger.error(f"Failed to start MQTT listener at startup: {str(e)}")
+    
     # Run the server with SocketIO
+    logger.info("Starting Flask-SocketIO server with integrated MQTT listener")
     socketio.run(app, host='0.0.0.0', port=5001, debug=False, allow_unsafe_werkzeug=True)
