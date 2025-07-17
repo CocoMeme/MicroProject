@@ -16,11 +16,11 @@ import {
   Button,
   Stack,
   Chip,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
-  LinearProgress
+  useTheme,
+  useMediaQuery,
+  Card,
+  CardContent,
+  Grid
 } from '@mui/material';
 import { 
   QrCode2 as QrCodeIcon, 
@@ -42,16 +42,15 @@ const Orders = () => {
     severity: 'success'
   });
 
+  // Responsive design
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
+  const isSmallScreen = useMediaQuery(theme.breakpoints.down('sm'));
+
   // WebSocket and printing states
   const [wsConnected, setWsConnected] = useState(false);
   const [connectingWs, setConnectingWs] = useState(false);
   const [printingOrders, setPrintingOrders] = useState(new Set());
-  const [printDialog, setPrintDialog] = useState({
-    open: false,
-    orderId: null,
-    status: '',
-    progress: 0
-  });
 
   // Initialize WebSocket connection
   useEffect(() => {
@@ -86,21 +85,8 @@ const Orders = () => {
 
   // WebSocket event handlers
   const handlePrintStatus = (data) => {
-    if (data.order_number) {
-      let progress = 0;
-      switch (data.status) {
-        case 'processing': progress = 25; break;
-        case 'creating': progress = 50; break;
-        case 'printing': progress = 75; break;
-        default: progress = 0;
-      }
-      
-      setPrintDialog(prev => ({
-        ...prev,
-        status: data.message,
-        progress: progress
-      }));
-    }
+    // Just log the status without showing modal
+    console.log('Print status:', data.message);
   };
 
   const handlePrintSuccess = (data) => {
@@ -109,22 +95,17 @@ const Orders = () => {
       newSet.delete(data.order_number);
       return newSet;
     });
-    
-    setPrintDialog(prev => ({
-      ...prev,
-      status: 'Print completed successfully!',
-      progress: 100
-    }));
-
-    setTimeout(() => {
-      setPrintDialog({ open: false, orderId: null, status: '', progress: 0 });
-    }, 2000);
 
     setSnackbar({
       open: true,
       message: `QR code printed successfully for order ${data.order_number}`,
       severity: 'success'
     });
+
+    // Reload the page after successful printing
+    setTimeout(() => {
+      window.location.reload();
+    }, 1000); // Wait 1 second to show the success message
   };
 
   const handlePrintError = (data) => {
@@ -133,8 +114,6 @@ const Orders = () => {
       newSet.delete(data.order_number);
       return newSet;
     });
-    
-    setPrintDialog({ open: false, orderId: null, status: '', progress: 0 });
     
     setSnackbar({
       open: true,
@@ -188,16 +167,6 @@ const Orders = () => {
     // Add to printing set
     setPrintingOrders(prev => new Set([...prev, orderId]));
 
-    // Show progress dialog for WebSocket printing
-    if (wsConnected) {
-      setPrintDialog({
-        open: true,
-        orderId: orderId,
-        status: 'Initializing print request...',
-        progress: 0
-      });
-    }
-
     try {
       if (wsConnected) {
         // Use WebSocket for better performance on slow connections
@@ -238,6 +207,11 @@ const Orders = () => {
           message: 'QR code print request sent successfully (HTTP)',
           severity: 'success'
         });
+
+        // Reload the page after successful HTTP printing
+        setTimeout(() => {
+          window.location.reload();
+        }, 1000); // Wait 1 second to show the success message
       }
     } catch (error) {
       console.error('Error printing QR code:', error);
@@ -249,9 +223,6 @@ const Orders = () => {
         return newSet;
       });
 
-      // Close progress dialog on error
-      setPrintDialog({ open: false, orderId: null, status: '', progress: 0 });
-      
       let errorMessage = 'Failed to print QR code';
       
       if (error.response?.data?.error) {
@@ -292,14 +263,21 @@ const Orders = () => {
   }
 
   return (
-    <Box sx={{ p: 3 }}>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-        <Typography variant="h4">
+    <Box sx={{ p: { xs: 2, md: 3 } }}>
+      <Box sx={{ 
+        display: 'flex', 
+        justifyContent: 'space-between', 
+        alignItems: 'center', 
+        mb: 2,
+        flexDirection: { xs: 'column', sm: 'row' },
+        gap: { xs: 2, sm: 0 }
+      }}>
+        <Typography variant="h4" sx={{ fontSize: { xs: '1.5rem', md: '2rem' } }}>
           Orders
         </Typography>
         
         {/* Connection Status */}
-        <Stack direction="row" spacing={1} alignItems="center">
+        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
           {connectingWs && (
             <Chip 
               icon={<CircularProgress size={16} />}
@@ -323,41 +301,20 @@ const Orders = () => {
         </Stack>
       </Box>
       
-      <Paper sx={{ width: '100%', overflow: 'hidden' }}>
-        <TableContainer sx={{ maxHeight: 440 }}>
-          <Table stickyHeader>
-            <TableHead>
-              <TableRow>
-                <TableCell>Order Number</TableCell>
-                <TableCell>Customer Name</TableCell>
-                <TableCell>Email</TableCell>
-                <TableCell>Contact</TableCell>
-                <TableCell>Product</TableCell>
-                <TableCell>Amount</TableCell>
-                <TableCell>Date</TableCell>
-                <TableCell align="right">Actions</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {orders
-                .slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage)
-                .map((order) => (
-                  <TableRow hover key={order.id}>
-                    <TableCell>{order.order_number}</TableCell>
-                    <TableCell>{order.customer_name}</TableCell>
-                    <TableCell>{order.email}</TableCell>
-                    <TableCell>{order.contact_number || 'N/A'}</TableCell>
-                    <TableCell>{order.product_name}</TableCell>
-                    <TableCell>₱{parseFloat(order.amount || 0).toFixed(2)}</TableCell>
-                    <TableCell>
-                      {new Date(order.date).toLocaleDateString('en-US', {
-                        year: 'numeric',
-                        month: 'short',
-                        day: 'numeric',
-                      })}
-                    </TableCell>
-                    <TableCell align="right">
-                      <Stack direction="row" spacing={1} justifyContent="flex-end">
+      {/* Mobile Card View */}
+      {isMobile ? (
+        <Box>
+          <Grid container spacing={2}>
+            {orders
+              .slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage)
+              .map((order) => (
+                <Grid item xs={12} key={order.id}>
+                  <Card>
+                    <CardContent>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
+                        <Typography variant="h6" sx={{ fontSize: '1rem' }}>
+                          {order.order_number}
+                        </Typography>
                         <Button
                           variant="contained"
                           size="small"
@@ -368,30 +325,128 @@ const Orders = () => {
                         >
                           {printingOrders.has(order.id) ? 'Printing...' : 'Print QR'}
                         </Button>
-                      </Stack>
+                      </Box>
+                      
+                      <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                        <strong>Customer:</strong> {order.customer_name}
+                      </Typography>
+                      
+                      <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                        <strong>Contact:</strong> {order.contact_number || 'N/A'}
+                      </Typography>
+                      
+                      <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                        <strong>Product:</strong> {order.product_name}
+                      </Typography>
+                      
+                      <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                        <strong>Amount:</strong> ₱{parseFloat(order.amount || 0).toFixed(2)}
+                      </Typography>
+                      
+                      <Typography variant="body2" color="text.secondary">
+                        <strong>Date:</strong> {new Date(order.date).toLocaleDateString('en-US', {
+                          year: 'numeric',
+                          month: 'short',
+                          day: 'numeric',
+                        })}
+                      </Typography>
+                    </CardContent>
+                  </Card>
+                </Grid>
+              ))}
+          </Grid>
+          
+          {orders.length === 0 && (
+            <Paper sx={{ p: 3, textAlign: 'center' }}>
+              <Typography variant="body1" color="text.secondary">
+                No orders found
+              </Typography>
+            </Paper>
+          )}
+        </Box>
+      ) : (
+        /* Desktop Table View */
+        <Paper sx={{ width: '100%', overflow: 'hidden' }}>
+          <TableContainer sx={{ maxHeight: 440 }}>
+            <Table stickyHeader>
+              <TableHead>
+                <TableRow>
+                  <TableCell>Order Number</TableCell>
+                  <TableCell>Customer Name</TableCell>
+                  <TableCell>Contact</TableCell>
+                  <TableCell>Product</TableCell>
+                  <TableCell>Amount</TableCell>
+                  <TableCell>Date</TableCell>
+                  <TableCell align="right">Actions</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {orders
+                  .slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage)
+                  .map((order) => (
+                    <TableRow hover key={order.id}>
+                      <TableCell>{order.order_number}</TableCell>
+                      <TableCell>{order.customer_name}</TableCell>
+                      <TableCell>{order.contact_number || 'N/A'}</TableCell>
+                      <TableCell>{order.product_name}</TableCell>
+                      <TableCell>₱{parseFloat(order.amount || 0).toFixed(2)}</TableCell>
+                      <TableCell>
+                        {new Date(order.date).toLocaleDateString('en-US', {
+                          year: 'numeric',
+                          month: 'short',
+                          day: 'numeric',
+                        })}
+                      </TableCell>
+                      <TableCell align="right">
+                        <Stack direction="row" spacing={1} justifyContent="flex-end">
+                          <Button
+                            variant="contained"
+                            size="small"
+                            startIcon={printingOrders.has(order.id) ? <CircularProgress size={16} /> : <QrCodeIcon />}
+                            onClick={() => handlePrintQRCode(order.id)}
+                            disabled={printingOrders.has(order.id)}
+                            color={printingOrders.has(order.id) ? "secondary" : "primary"}
+                          >
+                            {printingOrders.has(order.id) ? 'Printing...' : 'Print QR'}
+                          </Button>
+                        </Stack>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                {orders.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={7} align="center">
+                      No orders found
                     </TableCell>
                   </TableRow>
-                ))}
-              {orders.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={8} align="center">
-                    No orders found
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </TableContainer>
-        <TablePagination
-          rowsPerPageOptions={[10, 25, 100]}
-          component="div"
-          count={orders.length}
-          rowsPerPage={rowsPerPage}
-          page={page}
-          onPageChange={handleChangePage}
-          onRowsPerPageChange={handleChangeRowsPerPage}
-        />
-      </Paper>
+                )}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        </Paper>
+      )}
+      
+      {/* Pagination */}
+      <TablePagination
+        rowsPerPageOptions={[10, 25, 100]}
+        component="div"
+        count={orders.length}
+        rowsPerPage={rowsPerPage}
+        page={page}
+        onPageChange={handleChangePage}
+        onRowsPerPageChange={handleChangeRowsPerPage}
+        sx={{ 
+          mt: 2,
+          '& .MuiTablePagination-toolbar': {
+            flexDirection: { xs: 'column', sm: 'row' },
+            alignItems: { xs: 'stretch', sm: 'center' },
+            gap: { xs: 1, sm: 0 }
+          },
+          '& .MuiTablePagination-spacer': {
+            display: { xs: 'none', sm: 'block' }
+          }
+        }}
+      />
 
       <Snackbar
         open={snackbar.open}
@@ -407,51 +462,6 @@ const Orders = () => {
           {snackbar.message}
         </Alert>
       </Snackbar>
-
-      {/* Print Progress Dialog */}
-      <Dialog 
-        open={printDialog.open} 
-        onClose={() => {}} 
-        disableEscapeKeyDown 
-        maxWidth="sm" 
-        fullWidth
-      >
-        <DialogTitle>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <PrintIcon />
-            Printing QR Code
-          </Box>
-        </DialogTitle>
-        <DialogContent>
-          <Box sx={{ mb: 2 }}>
-            <Typography variant="body2" color="text.secondary" gutterBottom>
-              Order ID: {printDialog.orderId}
-            </Typography>
-            <Typography variant="body1" gutterBottom>
-              {printDialog.status}
-            </Typography>
-            <LinearProgress 
-              variant="determinate" 
-              value={printDialog.progress} 
-              sx={{ mt: 2 }}
-            />
-            <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-              {printDialog.progress}% complete
-            </Typography>
-          </Box>
-          <Alert severity="info" sx={{ mt: 2 }}>
-            <Typography variant="body2">
-              Using WebSocket connection for optimal performance on slow networks.
-              This dialog will close automatically when printing is complete.
-            </Typography>
-          </Alert>
-        </DialogContent>
-        <DialogActions>
-          <Typography variant="caption" color="text.secondary">
-            Please wait while printing...
-          </Typography>
-        </DialogActions>
-      </Dialog>
     </Box>
   );
 };

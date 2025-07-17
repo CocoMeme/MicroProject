@@ -73,7 +73,6 @@ def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 order_number TEXT NOT NULL,
                 customer_name TEXT NOT NULL,
-                email TEXT,
                 contact_number TEXT NOT NULL,
                 address TEXT NOT NULL,
                 product_id TEXT NOT NULL,
@@ -101,22 +100,49 @@ def init_db():
     conn.close()
 
 def migrate_database():
-    """Add contact_number column to existing orders table if it doesn't exist"""
+    """Remove email column from existing orders table if it exists"""
     try:
         conn = sqlite3.connect('database.db')
         c = conn.cursor()
         
-        # Check if contact_number column exists
+        # Check if email column exists
         c.execute("PRAGMA table_info(orders)")
         columns = [column[1] for column in c.fetchall()]
         
-        if 'contact_number' not in columns:
-            print("Adding contact_number column to orders table...")
-            c.execute('ALTER TABLE orders ADD COLUMN contact_number TEXT DEFAULT "N/A"')
+        if 'email' in columns:
+            print("Removing email column from orders table...")
+            
+            # Create new table without email column
+            c.execute('''
+                CREATE TABLE orders_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    order_number TEXT NOT NULL,
+                    customer_name TEXT NOT NULL,
+                    contact_number TEXT NOT NULL,
+                    address TEXT NOT NULL,
+                    product_id TEXT NOT NULL,
+                    product_name TEXT NOT NULL,
+                    amount REAL NOT NULL,
+                    date TEXT NOT NULL
+                )
+            ''')
+            
+            # Copy data from old table to new table (excluding email)
+            c.execute('''
+                INSERT INTO orders_new (
+                    id, order_number, customer_name, contact_number, address,
+                    product_id, product_name, amount, date
+                )
+                SELECT id, order_number, customer_name, contact_number, address,
+                       product_id, product_name, amount, date
+                FROM orders
+            ''')
+            
+            # Drop old table and rename new table
+            c.execute('DROP TABLE orders')
+            c.execute('ALTER TABLE orders_new RENAME TO orders')
+            
             conn.commit()
-            print("Database migration completed successfully.")
-        else:
-            print("Database is already up to date.")
             
         conn.close()
     except Exception as e:
@@ -502,13 +528,12 @@ def create_manual_order():
         # Insert new manual order
         c.execute('''
             INSERT INTO orders (
-                order_number, customer_name, email, contact_number, address,
+                order_number, customer_name, contact_number, address,
                 product_id, product_name, amount, date
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             new_order_number,
             data['customerName'],
-            '',  # No email for manual orders
             data['contactNumber'],
             data['address'],
             'MANUAL',  # Special product ID for manual orders
