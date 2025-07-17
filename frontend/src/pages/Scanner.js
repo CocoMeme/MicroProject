@@ -35,6 +35,8 @@ export default function Scanner() {
   const [wsConnected, setWsConnected] = useState(false);
   const [connectionInfo, setConnectionInfo] = useState(null);
   const [isConnecting, setIsConnecting] = useState(false);
+  const [lastRefresh, setLastRefresh] = useState(null);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   
   // Modal states
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
@@ -143,6 +145,9 @@ export default function Scanner() {
 
       // Get initial system status
       websocketService.getSystemStatus();
+      
+      // Get initial QR history when WebSocket connects
+      getQRHistory();
 
       // Update connection info periodically
       const connectionInterval = setInterval(() => {
@@ -206,6 +211,15 @@ export default function Scanner() {
     return () => clearTimeout(timer);
   }, [wsConnected]);
 
+  // Initial data load when component mounts
+  useEffect(() => {
+    // Load QR history immediately when component mounts
+    getQRHistory();
+    
+    // Also check camera status
+    checkStatus();
+  }, []); // Empty dependency array means this runs once on mount
+
   const checkStatus = async () => {
     try {
       const response = await fetch(`${RASPI_SERVER}/camera/status`);
@@ -231,6 +245,7 @@ export default function Scanner() {
   };
 
   const getQRHistory = async () => {
+    setIsLoadingHistory(true);
     try {
       console.log('Fetching QR history...'); // Debug log
       // Get QR history from both Raspberry Pi (local) and main backend (stored)
@@ -298,8 +313,11 @@ export default function Scanner() {
       
       console.log('Final combined history:', combinedHistory); // Debug log
       setQrHistory(combinedHistory.slice(0, 20)); // Keep only latest 20
+      setLastRefresh(new Date()); // Update last refresh time
     } catch (err) {
       console.error('Failed to get QR history:', err);
+    } finally {
+      setIsLoadingHistory(false);
     }
   };
 
@@ -362,6 +380,26 @@ export default function Scanner() {
       }
     }
   };
+
+  // Auto-refresh QR history with smart intervals
+  useEffect(() => {
+    // Fetch immediately when effect runs
+    getQRHistory();
+    
+    const autoRefreshInterval = setInterval(() => {
+      // Auto-refresh at different intervals based on connection type
+      if (!wsConnected) {
+        // More frequent refresh when no WebSocket (5 seconds)
+        getQRHistory();
+      } else {
+        // Less frequent backup refresh even with WebSocket (15 seconds)
+        // This ensures we don't miss anything if WebSocket has issues
+        getQRHistory();
+      }
+    }, wsConnected ? 15000 : 5000); // 15s with WebSocket, 5s without
+
+    return () => clearInterval(autoRefreshInterval);
+  }, [wsConnected]);
 
   return (
     <Box>
@@ -469,161 +507,166 @@ export default function Scanner() {
         </Grid>
 
         <Grid item xs={12} md={4}>
-          {/* Action Buttons */}
-          <Paper sx={{ p: 3, mb: 3 }}>
+          {/* Latest Scans List - Auto-refreshing */}
+          <Paper sx={{ p: 3, height: 'calc(100vh - 200px)', display: 'flex', flexDirection: 'column' }}>
             <Typography variant="h6" gutterBottom>
-              QR Code Actions
+              Latest Scans
+              <Chip 
+                label={`${qrHistory.length} scans`} 
+                size="small" 
+                sx={{ ml: 2 }}
+                color={qrHistory.length > 0 ? 'primary' : 'default'}
+              />
+              {isLoadingHistory && (
+                <CircularProgress size={16} sx={{ ml: 1 }} />
+              )}
             </Typography>
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            
+            {/* Last refresh indicator */}
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+              {lastRefresh && (
+                <Typography variant="caption" color="text.secondary">
+                  Last updated: {lastRefresh.toLocaleTimeString()}
+                </Typography>
+              )}
+              {isLoadingHistory && (
+                <Typography variant="caption" color="primary">
+                  Refreshing...
+                </Typography>
+              )}
+            </Box>
+            
+            {/* Connection Status Indicator */}
+            <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
+              <Chip 
+                icon={wsConnected ? <WifiIcon /> : <WifiOffIcon />}
+                label={wsConnected ? 'Live (15s backup)' : 'Auto-refresh (5s)'} 
+                color={wsConnected ? 'success' : 'info'} 
+                size="small" 
+              />
+              <Chip 
+                label={status.online ? 'Pi Online' : 'Pi Offline'} 
+                color={status.online ? 'success' : 'error'} 
+                size="small" 
+              />
+            </Box>
+
+            {/* Scrollable scan list */}
+            <Box sx={{ 
+              flexGrow: 1, 
+              overflow: 'auto',
+              border: '1px solid',
+              borderColor: 'divider',
+              borderRadius: 1,
+              bgcolor: 'background.paper'
+            }}>
+              {qrHistory.length === 0 ? (
+                <Box sx={{ 
+                  display: 'flex', 
+                  flexDirection: 'column', 
+                  alignItems: 'center', 
+                  justifyContent: 'center',
+                  height: '100%',
+                  color: 'text.secondary',
+                  p: 3
+                }}>
+                  <QrCodeScannerIcon sx={{ fontSize: 48, mb: 2, opacity: 0.5 }} />
+                  <Typography variant="body2" align="center">
+                    No scans detected yet
+                  </Typography>
+                  <Typography variant="caption" align="center" sx={{ mt: 1 }}>
+                    Point a QR code at the camera
+                  </Typography>
+                </Box>
+              ) : (
+                <List sx={{ p: 0 }}>
+                  {qrHistory.map((scan, index) => (
+                    <React.Fragment key={`${scan.qr_data}-${scan.timestamp}-${index}`}>
+                      <ListItem 
+                        sx={{ 
+                          py: 2,
+                          bgcolor: index === 0 ? 'action.hover' : 'transparent',
+                          borderLeft: index === 0 ? '4px solid' : 'none',
+                          borderLeftColor: index === 0 ? 'primary.main' : 'transparent'
+                        }}
+                      >
+                        <Box sx={{ width: '100%' }}>
+                          {/* QR Data and Status */}
+                          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                            <Typography variant="subtitle2" sx={{ fontWeight: 'bold' }}>
+                              {scan.validation?.valid && scan.validation?.order_number 
+                                ? scan.validation.order_number 
+                                : scan.qr_data}
+                            </Typography>
+                            <Chip
+                              label={scan.validation?.valid ? 'Valid' : 'Invalid'}
+                              color={scan.validation?.valid ? 'success' : 'error'}
+                              size="small"
+                            />
+                          </Box>
+                          
+                          {/* Order Details if valid */}
+                          {scan.validation?.valid && (
+                            <Box sx={{ mb: 1 }}>
+                              {scan.validation.customer_name && (
+                                <Typography variant="body2" color="text.secondary">
+                                  Customer: {scan.validation.customer_name}
+                                </Typography>
+                              )}
+                              {scan.validation.product_name && (
+                                <Typography variant="body2" color="text.secondary">
+                                  Product: {scan.validation.product_name}
+                                </Typography>
+                              )}
+                              {scan.validation.amount && (
+                                <Typography variant="body2" color="text.secondary">
+                                  Amount: ₱{parseFloat(scan.validation.amount).toFixed(2)}
+                                </Typography>
+                              )}
+                            </Box>
+                          )}
+                          
+                          {/* Timestamp */}
+                          <Typography variant="caption" color="text.secondary">
+                            {new Date(scan.timestamp).toLocaleString()}
+                          </Typography>
+                          
+                          {/* QR Image if available */}
+                          {scan.image_data && scan.image_data.base64 && (
+                            <Box sx={{ mt: 1, textAlign: 'center' }}>
+                              <img 
+                                src={`data:image/jpeg;base64,${scan.image_data.base64}`}
+                                alt="QR Code"
+                                style={{ 
+                                  maxWidth: '80px', 
+                                  maxHeight: '80px',
+                                  border: '1px solid #ddd',
+                                  borderRadius: '4px'
+                                }}
+                              />
+                            </Box>
+                          )}
+                        </Box>
+                      </ListItem>
+                      {index < qrHistory.length - 1 && <Divider />}
+                    </React.Fragment>
+                  ))}
+                </List>
+              )}
+            </Box>
+
+            {/* Quick Actions */}
+            <Box sx={{ mt: 2, display: 'flex', justifyContent: 'center' }}>
               <Button
-                variant="contained"
-                startIcon={<HistoryIcon />}
+                variant="outlined"
+                size="small"
                 onClick={() => setHistoryModalOpen(true)}
                 disabled={qrHistory.length === 0}
-                fullWidth
               >
-                View Scan History ({qrHistory.length})
-              </Button>
-              <Button
-                variant="outlined"
-                onClick={() => {
-                  console.log('Force refreshing QR history...');
-                  getQRHistory();
-                }}
-                fullWidth
-                sx={{ mt: 1 }}
-              >
-                Force Refresh History
-              </Button>
-              <Button
-                variant="outlined"
-                onClick={async () => {
-                  try {
-                    const response = await fetch(`${RASPI_SERVER}/debug/test-qr-image`, {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ qr_code: 'ORD-001' })
-                    });
-                    if (response.ok) {
-                      console.log('Test QR image created');
-                      // History will update via WebSocket
-                    } else {
-                      console.error('Failed to create test QR image');
-                    }
-                  } catch (err) {
-                    console.error('Error creating test QR image:', err);
-                  }
-                }}
-                fullWidth
-                sx={{ mt: 1 }}
-              >
-                Test QR Image
+                View All History
               </Button>
             </Box>
           </Paper>
-
-          {/* Connection Status Panel */}
-          <Paper sx={{ p: 3 }}>
-            <Typography variant="h6" gutterBottom>
-              Connection Status
-            </Typography>
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                <Typography variant="body2">WebSocket:</Typography>
-                <Chip 
-                  label={wsConnected ? 'Connected' : 'Disconnected'} 
-                  color={wsConnected ? 'success' : 'error'} 
-                  size="small" 
-                />
-              </Box>
-              
-              {connectionInfo && (
-                <>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <Typography variant="body2">Transport:</Typography>
-                    <Typography variant="body2">{connectionInfo.transport}</Typography>
-                  </Box>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <Typography variant="body2">Ping:</Typography>
-                    <Typography variant="body2">{connectionInfo.ping}ms</Typography>
-                  </Box>
-                  {connectionInfo.reconnectAttempts > 0 && (
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <Typography variant="body2">Reconnects:</Typography>
-                      <Typography variant="body2">{connectionInfo.reconnectAttempts}</Typography>
-                    </Box>
-                  )}
-                </>
-              )}
-              
-              <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                <Typography variant="body2">Raspberry Pi:</Typography>
-                <Chip 
-                  label={status.online ? 'Online' : 'Offline'} 
-                  color={status.online ? 'success' : 'error'} 
-                  size="small" 
-                />
-              </Box>
-            </Box>
-          </Paper>
-
-          {/* Latest Scan Display */}
-          {qrHistory.length > 0 && (
-            <Paper sx={{ p: 3 }}>
-              <Typography variant="h6" gutterBottom>
-                Latest Scan
-              </Typography>
-              <Box>
-                <Typography variant="body1" gutterBottom>
-                  <strong>Order ID:</strong> {qrHistory[0].validation?.valid && qrHistory[0].validation?.order_number 
-                    ? qrHistory[0].validation.order_number 
-                    : qrHistory[0].validation?.valid && qrHistory[0].qr_data
-                    ? qrHistory[0].qr_data
-                    : 'Invalid QR Code'
-                  }
-                </Typography>
-                
-                {/* Display QR Image if available */}
-                {qrHistory[0].image_data && qrHistory[0].image_data.base64 && (
-                  <Box sx={{ mb: 2, textAlign: 'center' }}>
-                    <Paper sx={{ p: 1, bgcolor: 'grey.50', display: 'inline-block' }}>
-                      <img 
-                        src={`data:image/jpeg;base64,${qrHistory[0].image_data.base64}`}
-                        alt="Latest QR Code"
-                        style={{ 
-                          maxWidth: '150px', 
-                          maxHeight: '150px',
-                          border: '1px solid #ddd',
-                          borderRadius: '4px'
-                        }}
-                      />
-                    </Paper>
-                  </Box>
-                )}
-                
-                <Typography variant="body2" color="text.secondary" gutterBottom>
-                  <strong>QR Data:</strong> {qrHistory[0].qr_data}
-                </Typography>
-                <Typography variant="body2" color="text.secondary" gutterBottom>
-                  <strong>Scanned:</strong> {new Date(qrHistory[0].timestamp).toLocaleString()}
-                </Typography>
-                <Box sx={{ mt: 1 }}>
-                  <Chip
-                    label={qrHistory[0].validation?.valid ? 'Valid' : 'Not Valid'}
-                    color={qrHistory[0].validation?.valid ? 'success' : 'error'}
-                    size="small"
-                  />
-                  <Chip
-                    label={qrHistory[0].device || 'unknown'}
-                    size="small"
-                    variant="outlined"
-                    color="info"
-                    sx={{ ml: 1 }}
-                  />
-                </Box>
-              </Box>
-            </Paper>
-          )}
         </Grid>
       </Grid>
 
