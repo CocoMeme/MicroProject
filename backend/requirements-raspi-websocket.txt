@@ -1,0 +1,12 @@
+# Requirements for Raspberry Pi Server with WebSocket support
+Flask==2.3.3
+Flask-CORS==4.0.0
+Flask-SocketIO==5.3.6
+python-socketio==5.8.0
+eventlet==0.33.3
+Pillow==10.0.0
+qrcode==7.4.2
+pygame==2.5.2
+paho-mqtt==1.6.1
+opencv-python==4.8.0.76
+requests==2.31.0

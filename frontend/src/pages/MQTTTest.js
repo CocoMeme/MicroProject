@@ -31,7 +31,7 @@ import {
 } from '@mui/icons-material';
 import ConnectionMonitor from '../components/ConnectionMonitor';
 import ErrorBoundary from '../components/ErrorBoundary';
-import { useWebSocket } from '../hooks/useWebSocket';
+import raspberryPiWebSocketService from '../services/raspberryPiWebSocketService';
 
 const RASPI_SERVER = 'http://192.168.100.63:5001'; // Your Raspberry Pi server
 
@@ -42,53 +42,78 @@ const MQTTTest = () => {
   const [error, setError] = useState(null);
   const [lastUpdate, setLastUpdate] = useState(null);
   const [restarting, setRestarting] = useState(false);
+  const [wsConnected, setWsConnected] = useState(false);
+  const [connecting, setConnecting] = useState(false);
 
-  // WebSocket connection for real-time MQTT messages
-  const { isConnected, on } = useWebSocket(RASPI_SERVER);
-
-  // Set up WebSocket message listeners
+  // Initialize WebSocket connection
   useEffect(() => {
-    if (!isConnected) return;
+    const initializeWebSocket = async () => {
+      setConnecting(true);
+      try {
+        await raspberryPiWebSocketService.connect(RASPI_SERVER);
+        setWsConnected(true);
+        
+        // Set up event listeners for MQTT messages
+        raspberryPiWebSocketService.on('mqtt_message', (data) => {
+          console.log('Received MQTT message:', data);
+          console.log('Message structure:', {
+            topic: data.topic,
+            message: data.message,
+            timestamp: data.timestamp
+          });
+          
+          setMqttMessages(prev => {
+            const newMessage = {
+              ...data,
+              id: Date.now() + Math.random()
+            };
+            const newMessages = [...prev, newMessage];
+            // Keep only last 50 messages
+            return newMessages.slice(-50);
+          });
+        });
 
-    const handleMqttMessage = (data) => {
-      setMqttMessages(prev => {
-        const newMessage = {
-          ...data,
-          timestamp: new Date().toISOString(),
-          id: Date.now()
-        };
-        const newMessages = [...prev, newMessage];
-        // Keep only last 50 messages
-        return newMessages.slice(-50);
-      });
+        raspberryPiWebSocketService.on('mqtt_status', (data) => {
+          console.log('Received MQTT status:', data);
+          setMqttStatus(data);
+          setLastUpdate(new Date());
+        });
+
+        raspberryPiWebSocketService.on('system_status', (data) => {
+          console.log('Received system status:', data);
+          if (data.mqtt_system) {
+            setMqttStatus(data.mqtt_system);
+            setLastUpdate(new Date());
+          }
+        });
+
+      } catch (error) {
+        console.error('WebSocket connection failed:', error);
+        setWsConnected(false);
+        setError(`WebSocket connection failed: ${error.message}`);
+      } finally {
+        setConnecting(false);
+      }
     };
 
-    const handleMqttStatus = (data) => {
-      setMqttStatus(data);
-      setLastUpdate(new Date());
-    };
-
-    // Set up listeners
-    const cleanupMqttMessage = on('mqtt_message', handleMqttMessage);
-    const cleanupMqttStatus = on('mqtt_status', handleMqttStatus);
+    initializeWebSocket();
 
     return () => {
-      if (cleanupMqttMessage) cleanupMqttMessage();
-      if (cleanupMqttStatus) cleanupMqttStatus();
+      // Cleanup listeners if needed
+      raspberryPiWebSocketService.disconnect();
     };
-  }, [isConnected, on]);
+  }, []);
 
-  // Remove the old useEffect that was trying to filter non-existent messages
-  // useEffect(() => {
-  //   const mqttWebSocketMessages = messages.filter(msg => 
-  //     msg.type === 'mqtt_message' || msg.type === 'mqtt_status'
-  //   );
-  //   setMqttMessages(prev => {
-  //     const newMessages = [...prev, ...mqttWebSocketMessages];
-  //     // Keep only last 50 messages
-  //     return newMessages.slice(-50);
-  //   });
-  // }, [messages]);
+  // Monitor WebSocket connection status
+  useEffect(() => {
+    const checkConnection = () => {
+      const connected = raspberryPiWebSocketService.isConnectedToServer();
+      setWsConnected(connected);
+    };
+
+    const interval = setInterval(checkConnection, 2000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Fetch MQTT status from Raspberry Pi server
   const fetchMqttStatus = async () => {
@@ -198,7 +223,14 @@ const MQTTTest = () => {
 
                 <Box display="flex" alignItems="center" gap={1} mb={1}>
                   <Typography variant="body2">WebSocket:</Typography>
-                  {isConnected ? (
+                  {connecting ? (
+                    <Chip 
+                      icon={<CircularProgress size={16} />} 
+                      label="Connecting..." 
+                      color="info" 
+                      size="small" 
+                    />
+                  ) : wsConnected ? (
                     <Chip 
                       icon={<WifiIcon />} 
                       label="Connected" 
@@ -385,7 +417,7 @@ const MQTTTest = () => {
                           <ListItemText
                             primary={
                               <Typography variant="body2" sx={{ color: 'common.white', fontFamily: 'monospace' }}>
-                                [{formatTimestamp(message.timestamp)}] {message.data?.topic || 'mqtt'} → {JSON.stringify(message.data)}
+                                [{formatTimestamp(message.timestamp)}] {message.topic} → {message.message}
                               </Typography>
                             }
                           />

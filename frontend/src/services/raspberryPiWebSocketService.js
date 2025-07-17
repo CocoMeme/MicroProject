@@ -104,6 +104,36 @@ class RaspberryPiWebSocketService {
       console.log('Printer status:', data);
       this.emit('printer_status', data);
     });
+
+    // Handle MQTT messages
+    this.socket.on('mqtt_message', (data) => {
+      console.log('MQTT message:', data);
+      this.emit('mqtt_message', data);
+    });
+
+    // Handle MQTT status updates
+    this.socket.on('mqtt_status', (data) => {
+      console.log('MQTT status:', data);
+      this.emit('mqtt_status', data);
+    });
+
+    // Handle QR detection
+    this.socket.on('qr_detected', (data) => {
+      console.log('QR detected:', data);
+      this.emit('qr_detected', data);
+    });
+
+    // Handle QR history updates
+    this.socket.on('qr_history_updated', (data) => {
+      console.log('QR history updated:', data);
+      this.emit('qr_history_updated', data);
+    });
+
+    // Handle system status updates
+    this.socket.on('system_status', (data) => {
+      console.log('System status:', data);
+      this.emit('system_status', data);
+    });
   }
 
   disconnect() {

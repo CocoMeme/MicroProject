@@ -38,8 +38,11 @@ CORS(app,
 socketio = SocketIO(app, 
                    cors_allowed_origins="*", 
                    async_mode='threading',
-                   logger=True,  # Enable logging for debugging
-                   engineio_logger=True)
+                   logger=False,  # Disable verbose logging
+                   engineio_logger=False,
+                   transport=['websocket', 'polling'],  # Support both transports
+                   ping_timeout=60,
+                   ping_interval=25)
 
 printer = ReceiptPrinter()
 camera = CameraManager()
@@ -49,7 +52,7 @@ class MQTTListener:
     def __init__(self, broker_host="localhost", broker_port=1883):
         self.broker_host = broker_host
         self.broker_port = broker_port
-        self.client = mqtt.Client()
+        self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1)
         self.client.on_connect = self.on_connect
         self.client.on_message = self.on_message
         self.client.on_disconnect = self.on_disconnect
@@ -71,22 +74,36 @@ class MQTTListener:
 
     def on_message(self, client, userdata, msg):
         timestamp = datetime.now().strftime('%H:%M:%S')
-        message = msg.payload.decode()
-        logger.info(f"📨 MQTT [{timestamp}] {msg.topic} > {message}")
+        try:
+            message = msg.payload.decode('utf-8')
+        except UnicodeDecodeError:
+            message = msg.payload.decode('utf-8', errors='replace')
+        
+        topic = msg.topic
+        logger.info(f"📨 MQTT [{timestamp}] {topic} > {message}")
         
         # Log to file
         try:
-            with open("mqtt_messages.log", "a") as f:
-                f.write(f"[{timestamp}] {msg.topic} > {message}\n")
+            with open("mqtt_messages.log", "a", encoding='utf-8') as f:
+                f.write(f"[{timestamp}] {topic} > {message}\n")
         except Exception as e:
             logger.error(f"Failed to write MQTT log: {e}")
         
         # Emit MQTT message via WebSocket for real-time monitoring
-        socketio.emit('mqtt_message', {
-            'topic': msg.topic,
+        mqtt_data = {
+            'topic': topic,
             'message': message,
-            'timestamp': datetime.now().isoformat()
-        })
+            'timestamp': datetime.now().isoformat(),
+            'raw_timestamp': timestamp
+        }
+        
+        logger.info(f"Emitting MQTT message via WebSocket: {mqtt_data}")
+        
+        # Emit to all connected clients
+        socketio.emit('mqtt_message', mqtt_data)
+        
+        # Also broadcast to all namespaces
+        socketio.emit('mqtt_message', mqtt_data, namespace='/')
 
     def on_disconnect(self, client, userdata, rc):
         self.is_connected = False
@@ -676,6 +693,40 @@ def handle_check_printer_status():
             'error': str(e),
             'timestamp': datetime.now().isoformat()
         })
+
+@app.route('/debug/test-mqtt-message', methods=['POST'])
+def test_mqtt_message():
+    """Debug endpoint to test MQTT message emission"""
+    try:
+        data = request.get_json()
+        test_message = data.get('message', 'W: 2.27 in, L: 4.22 in, H: 1.59 in → 📦 Small')
+        test_topic = data.get('topic', 'esp32/box/result')
+        
+        # Create the same message structure as the real MQTT listener
+        mqtt_data = {
+            'topic': test_topic,
+            'message': test_message,
+            'timestamp': datetime.now().isoformat(),
+            'raw_timestamp': datetime.now().strftime('%H:%M:%S')
+        }
+        
+        logger.info(f"📨 TEST MQTT [{mqtt_data['raw_timestamp']}] {test_topic} > {test_message}")
+        logger.info(f"Emitting test MQTT message via WebSocket: {mqtt_data}")
+        
+        # Emit the message just like the real MQTT listener would
+        socketio.emit('mqtt_message', mqtt_data)
+        
+        return jsonify({
+            'message': 'Test MQTT message sent',
+            'data': mqtt_data
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error sending test MQTT message: {e}")
+        return jsonify({
+            'error': 'Failed to send test MQTT message',
+            'details': str(e)
+        }), 500
 
 @app.route('/debug/simulate-qr-scan', methods=['POST'])
 def simulate_qr_scan():
