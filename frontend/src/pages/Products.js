@@ -1,72 +1,32 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   Container,
-  Grid,
   Card,
   CardContent,
-  CardMedia,
   Typography,
   Button,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
   TextField,
   Box,
   Snackbar,
   Alert,
   AppBar,
   Toolbar,
-  Link
+  Link,
+  Paper
 } from '@mui/material';
 import { Link as RouterLink } from 'react-router-dom';
 import axios from 'axios';
 
 const Products = () => {
-  const [products, setProducts] = useState([]);
-  const [selectedProduct, setSelectedProduct] = useState(null);
-  const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
+  const [loading, setLoading] = useState(false);
   const [formData, setFormData] = useState({
     customerName: '',
-    email: '',
     contactNumber: '',
-    address: ''
+    address: '',
+    productName: '',
+    price: ''
   });
-
-  useEffect(() => {
-    fetchProducts();
-  }, []);
-
-  const fetchProducts = async () => {
-    try {
-      const response = await axios.get('http://192.168.100.61:5000/api/products');
-      setProducts(response.data);
-    } catch (error) {
-      console.error('Error fetching products:', error);
-      setSnackbar({
-        open: true,
-        message: 'Failed to load products',
-        severity: 'error'
-      });
-    }
-  };
-
-  const handleCheckout = (product) => {
-    setSelectedProduct(product);
-    setCheckoutOpen(true);
-  };
-
-  const handleCloseCheckout = () => {
-    setCheckoutOpen(false);
-    setSelectedProduct(null);
-    setFormData({
-      customerName: '',
-      email: '',
-      contactNumber: '',
-      address: ''
-    });
-  };
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -78,19 +38,22 @@ const Products = () => {
 
   const handleSubmitOrder = async (e) => {
     e.preventDefault();
+    setLoading(true);
+    
     try {
-      const orderData = {
-        ...formData,
-        productId: selectedProduct.id
-      };
-
-      const response = await axios.post('http://192.168.100.61:5000/api/orders', orderData);
+      const response = await axios.post('http://192.168.100.61:5000/api/manual-orders', formData);
       setSnackbar({
         open: true,
         message: 'Order placed successfully!',
         severity: 'success'
       });
-      handleCloseCheckout();
+      setFormData({
+        customerName: '',
+        contactNumber: '',
+        address: '',
+        productName: '',
+        price: ''
+      });
     } catch (error) {
       console.error('Error submitting order:', error);
       setSnackbar({
@@ -98,6 +61,8 @@ const Products = () => {
         message: 'Failed to place order',
         severity: 'error'
       });
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -128,140 +93,94 @@ const Products = () => {
         </Toolbar>
       </AppBar>
 
-      <Container maxWidth="lg" sx={{ py: 4 }}>
-        <Typography variant="h4" component="h1" gutterBottom align="center" sx={{ mb: 6 }}>
-          Available Packages
-        </Typography>
-        
-        <Grid container spacing={4}>
-          {products.map((product) => (
-            <Grid item key={product.id} xs={12} sm={6} md={4}>
-              <Card sx={{ 
-                height: '100%', 
-                display: 'flex', 
-                flexDirection: 'column',
-                transition: 'transform 0.2s, box-shadow 0.2s',
-                '&:hover': {
-                  transform: 'translateY(-4px)',
-                  boxShadow: 4
-                }
-              }}>
-                <CardMedia
-                  component="img"
-                  height="200"
-                  image={product.image}
-                  alt={product.name}
-                />
-                <CardContent sx={{ flexGrow: 1 }}>
-                  <Typography gutterBottom variant="h5" component="h2">
-                    {product.name}
-                  </Typography>
-                  <Typography>
-                    {product.description}
-                  </Typography>
-                  <Typography variant="h6" color="primary" sx={{ mt: 2 }}>
-                    {product.price}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                    Support: {product.contact_number || '+63 912 345 6789'}
-                  </Typography>
-                </CardContent>
-                <Box sx={{ p: 2 }}>
-                  <Button
-                    variant="contained"
-                    fullWidth
-                    onClick={() => handleCheckout(product)}
-                    sx={{
-                      py: 1.5,
-                      fontSize: '1.1rem'
-                    }}
-                  >
-                    Checkout
-                  </Button>
-                </Box>
-              </Card>
-            </Grid>
-          ))}
-        </Grid>
-
-        <Dialog
-          open={checkoutOpen}
-          onClose={handleCloseCheckout}
-          maxWidth="sm"
-          fullWidth
-        >
-          <DialogTitle>Checkout - {selectedProduct?.name}</DialogTitle>
+      <Container maxWidth="sm" sx={{ py: 6 }}>
+        <Paper elevation={3} sx={{ p: 4, borderRadius: 2 }}>
+          <Typography variant="h4" component="h1" gutterBottom align="center" sx={{ mb: 4 }}>
+            Place Your Order
+          </Typography>
+          
           <form onSubmit={handleSubmitOrder}>
-            <DialogContent>
-              <Grid container spacing={2}>
-                <Grid item xs={12}>
-                  <TextField
-                    required
-                    fullWidth
-                    label="Full Name"
-                    name="customerName"
-                    value={formData.customerName}
-                    onChange={handleInputChange}
-                  />
-                </Grid>
-                <Grid item xs={12}>
-                  <TextField
-                    required
-                    fullWidth
-                    label="Email"
-                    name="email"
-                    type="email"
-                    value={formData.email}
-                    onChange={handleInputChange}
-                  />
-                </Grid>
-                <Grid item xs={12}>
-                  <TextField
-                    required
-                    fullWidth
-                    label="Contact Number"
-                    name="contactNumber"
-                    type="tel"
-                    value={formData.contactNumber}
-                    onChange={handleInputChange}
-                    placeholder="+63 912 345 6789"
-                  />
-                </Grid>
-                <Grid item xs={12}>
-                  <TextField
-                    required
-                    fullWidth
-                    label="Shipping Address"
-                    name="address"
-                    multiline
-                    rows={3}
-                    value={formData.address}
-                    onChange={handleInputChange}
-                  />
-                </Grid>
-                {selectedProduct && (
-                  <Grid item xs={12}>
-                    <Typography variant="h6" gutterBottom>
-                      Order Summary
-                    </Typography>
-                    <Typography>
-                      Package: {selectedProduct.name}
-                    </Typography>
-                    <Typography>
-                      Price: {selectedProduct.price}
-                    </Typography>
-                  </Grid>
-                )}
-              </Grid>
-            </DialogContent>
-            <DialogActions>
-              <Button onClick={handleCloseCheckout}>Cancel</Button>
-              <Button type="submit" variant="contained" color="primary">
-                Place Order
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+              <TextField
+                required
+                fullWidth
+                label="Full Name"
+                name="customerName"
+                value={formData.customerName}
+                onChange={handleInputChange}
+                variant="outlined"
+                sx={{ mb: 2 }}
+              />
+              
+              <TextField
+                required
+                fullWidth
+                label="Phone Number"
+                name="contactNumber"
+                type="tel"
+                value={formData.contactNumber}
+                onChange={handleInputChange}
+                placeholder="+63 912 345 6789"
+                variant="outlined"
+                sx={{ mb: 2 }}
+              />
+              
+              <TextField
+                required
+                fullWidth
+                label="Address"
+                name="address"
+                multiline
+                rows={4}
+                value={formData.address}
+                onChange={handleInputChange}
+                variant="outlined"
+                sx={{ mb: 2 }}
+              />
+              
+              <TextField
+                required
+                fullWidth
+                label="Product Name"
+                name="productName"
+                value={formData.productName}
+                onChange={handleInputChange}
+                variant="outlined"
+                sx={{ mb: 2 }}
+              />
+              
+              <TextField
+                required
+                fullWidth
+                label="Price"
+                name="price"
+                type="number"
+                inputProps={{ min: 0, step: 0.01 }}
+                value={formData.price}
+                onChange={handleInputChange}
+                variant="outlined"
+                sx={{ mb: 3 }}
+              />
+              
+              <Button
+                type="submit"
+                variant="contained"
+                size="large"
+                disabled={loading}
+                sx={{
+                  py: 1.5,
+                  fontSize: '1.1rem',
+                  backgroundColor: 'primary.main',
+                  '&:hover': {
+                    backgroundColor: 'primary.dark'
+                  }
+                }}
+              >
+                {loading ? 'Placing Order...' : 'Place Order'}
               </Button>
-            </DialogActions>
+            </Box>
           </form>
-        </Dialog>
+        </Paper>
 
         <Snackbar
           open={snackbar.open}

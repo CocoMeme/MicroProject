@@ -32,7 +32,10 @@ class ReceiptPrinter:
             text_height_large = 35
             spacing = 15
 
-            header_height = text_height_regular * 5  # Updated from 4 to 5 for contact number
+            header_height = text_height_regular * 4  # Order ID, Customer, Contact, Address
+            # Add extra height if email exists
+            if order_data.get('email') and order_data['email'].strip():
+                header_height += text_height_regular
             product_section_height = text_height_large * 2
             footer_height = text_height_regular  # Updated back to original for just date
 
@@ -50,8 +53,10 @@ class ReceiptPrinter:
             y += text_height_regular
             draw.text((10, y), f"Customer: {order_data['customerName']}", font=self.font_regular, fill='black')
             y += text_height_regular
-            draw.text((10, y), f"Email: {order_data['email']}", font=self.font_regular, fill='black')
-            y += text_height_regular
+            # Only show email if it exists and is not empty
+            if order_data.get('email') and order_data['email'].strip():
+                draw.text((10, y), f"Email: {order_data['email']}", font=self.font_regular, fill='black')
+                y += text_height_regular
             draw.text((10, y), f"Contact: {order_data.get('contactNumber', 'N/A')}", font=self.font_regular, fill='black')
             y += text_height_regular
             draw.text((10, y), f"Address: {order_data['address']}", font=self.font_regular, fill='black')

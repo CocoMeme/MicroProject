@@ -24,21 +24,64 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 def init_db():
     conn = sqlite3.connect('database.db')
     c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS orders (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            order_number TEXT NOT NULL,
-            customer_name TEXT NOT NULL,
-            email TEXT NOT NULL,
-            contact_number TEXT NOT NULL,
-            address TEXT NOT NULL,
-            product_id TEXT NOT NULL,
-            product_name TEXT NOT NULL,
-            amount REAL NOT NULL,
-            date TEXT NOT NULL,
-            status TEXT NOT NULL
-        )
-    ''')
+    
+    # Check if orders table exists with old schema (has status column)
+    c.execute("PRAGMA table_info(orders)")
+    columns = [column[1] for column in c.fetchall()]
+    
+    # If status column exists, we need to migrate the table
+    if 'status' in columns:
+        print("Migrating orders table to remove status column...")
+        
+        # Create backup of existing data
+        c.execute("SELECT * FROM orders")
+        existing_orders = c.fetchall()
+        
+        # Drop the old table
+        c.execute("DROP TABLE IF EXISTS orders")
+        
+        # Create new table without status column
+        c.execute('''
+            CREATE TABLE orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_number TEXT NOT NULL,
+                customer_name TEXT NOT NULL,
+                email TEXT,
+                contact_number TEXT NOT NULL,
+                address TEXT NOT NULL,
+                product_id TEXT NOT NULL,
+                product_name TEXT NOT NULL,
+                amount REAL NOT NULL,
+                date TEXT NOT NULL
+            )
+        ''')
+        
+        # Restore data (excluding status column)
+        for order in existing_orders:
+            c.execute('''
+                INSERT INTO orders (
+                    id, order_number, customer_name, email, contact_number, 
+                    address, product_id, product_name, amount, date
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', order[:10])  # Take first 10 columns (excluding status which was the last)
+        
+        print("Migration completed successfully!")
+    else:
+        # Create table if it doesn't exist
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_number TEXT NOT NULL,
+                customer_name TEXT NOT NULL,
+                email TEXT,
+                contact_number TEXT NOT NULL,
+                address TEXT NOT NULL,
+                product_id TEXT NOT NULL,
+                product_name TEXT NOT NULL,
+                amount REAL NOT NULL,
+                date TEXT NOT NULL
+            )
+        ''')
     
     # Create QR scans table to store scan history
     c.execute('''
@@ -266,7 +309,6 @@ def print_qr_code():
             'orderNumber': order_data['order_number'],
             'customerName': order_data['customer_name'],
             'date': order_data['date'],
-            'status': order_data['status'],
             'email': order_data['email'],
             'contactNumber': order_data.get('contact_number', 'N/A'),
             'address': order_data['address'],
@@ -357,8 +399,8 @@ def create_order():
         c.execute('''
             INSERT INTO orders (
                 order_number, customer_name, email, contact_number, address,
-                product_id, product_name, amount, date, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                product_id, product_name, amount, date
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             new_order_number,
             data['customerName'],
@@ -368,8 +410,7 @@ def create_order():
             data['productId'],
             product['name'],
             float(product['price'].replace('₱', '')),  # Convert price string to float
-            datetime.now().strftime("%Y-%m-%d"),
-            'Pending'
+            datetime.now().strftime("%Y-%m-%d")
         ))
 
         # Get the inserted order
@@ -385,6 +426,71 @@ def create_order():
 
         return jsonify({
             'message': 'Order created successfully',
+            'order': new_order
+        }), 201
+
+    except Exception as e:
+        return jsonify({'error': 'Internal server error', 'details': str(e)}), 500
+
+@app.route('/api/manual-orders', methods=['POST'])
+def create_manual_order():
+    try:
+        data = request.get_json()
+        required_fields = ['customerName', 'contactNumber', 'address', 'productName', 'price']
+
+        # Validate required fields
+        for field in required_fields:
+            if field not in data:
+                return jsonify({'error': f'Missing required field: {field}'}), 400
+
+        # Validate price is a number
+        try:
+            price = float(data['price'])
+            if price < 0:
+                return jsonify({'error': 'Price must be a positive number'}), 400
+        except ValueError:
+            return jsonify({'error': 'Invalid price format'}), 400
+
+        # Connect to database
+        conn = sqlite3.connect('database.db')
+        c = conn.cursor()
+
+        # Get the next order ID
+        c.execute('SELECT COUNT(*) FROM orders')
+        order_count = c.fetchone()[0]
+        new_order_number = f"ORD-{str(order_count + 1).zfill(3)}"
+
+        # Insert new manual order
+        c.execute('''
+            INSERT INTO orders (
+                order_number, customer_name, email, contact_number, address,
+                product_id, product_name, amount, date
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            new_order_number,
+            data['customerName'],
+            '',  # No email for manual orders
+            data['contactNumber'],
+            data['address'],
+            'MANUAL',  # Special product ID for manual orders
+            data['productName'],
+            price,
+            datetime.now().strftime("%Y-%m-%d")
+        ))
+
+        # Get the inserted order
+        order_id = c.lastrowid
+        conn.commit()
+
+        # Fetch the created order
+        conn.row_factory = dict_factory
+        c = conn.cursor()
+        c.execute('SELECT * FROM orders WHERE id = ?', (order_id,))
+        new_order = c.fetchone()
+        conn.close()
+
+        return jsonify({
+            'message': 'Manual order created successfully',
             'order': new_order
         }), 201
 
@@ -619,8 +725,8 @@ def validate_qr_code():
                 'order_number': order['order_number'],
                 'customer_name': order['customer_name'],
                 'product_name': order['product_name'],
-                'status': order['status'],
-                'amount': order['amount']
+                'amount': order['amount'],
+                'date': order['date']
             }), 200
         else:
             return jsonify({

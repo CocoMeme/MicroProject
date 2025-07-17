@@ -9,7 +9,6 @@ import {
   TableContainer,
   TableHead,
   TableRow,
-  Chip,
   TablePagination,
   CircularProgress,
   Alert,
@@ -85,21 +84,6 @@ const Orders = () => {
     setSnackbar(prev => ({ ...prev, open: false }));
   };
 
-  const getStatusColor = (status) => {
-    switch (status.toLowerCase()) {
-      case 'pending':
-        return 'warning';
-      case 'processing':
-        return 'info';
-      case 'completed':
-        return 'success';
-      case 'cancelled':
-        return 'error';
-      default:
-        return 'default';
-    }
-  };
-
   if (loading) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
@@ -126,7 +110,6 @@ const Orders = () => {
                 <TableCell>Product</TableCell>
                 <TableCell>Amount</TableCell>
                 <TableCell>Date</TableCell>
-                <TableCell>Status</TableCell>
                 <TableCell align="right">Actions</TableCell>
               </TableRow>
             </TableHead>
@@ -140,20 +123,13 @@ const Orders = () => {
                     <TableCell>{order.email}</TableCell>
                     <TableCell>{order.contact_number || 'N/A'}</TableCell>
                     <TableCell>{order.product_name}</TableCell>
-                    <TableCell>₱{order.amount.toFixed(2)}</TableCell>
+                    <TableCell>₱{parseFloat(order.amount || 0).toFixed(2)}</TableCell>
                     <TableCell>
                       {new Date(order.date).toLocaleDateString('en-US', {
                         year: 'numeric',
                         month: 'short',
                         day: 'numeric',
                       })}
-                    </TableCell>
-                    <TableCell>
-                      <Chip
-                        label={order.status}
-                        color={getStatusColor(order.status)}
-                        size="small"
-                      />
                     </TableCell>
                     <TableCell align="right">
                       <Stack direction="row" spacing={1} justifyContent="flex-end">
