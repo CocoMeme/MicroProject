@@ -317,38 +317,77 @@ def print_qr_code():
             'timestamp': datetime.now().isoformat()
         }
 
-        # Forward the print request to the Raspberry Pi
-        try:
-            response = requests.post(
-                f"{RASPBERRY_PI_URL}/print-qr",
-                json=printer_data,
-                headers={'Content-Type': 'application/json'},
-                timeout=10  # Add timeout to prevent hanging
-            )
+        # Forward the print request to the Raspberry Pi with retries
+        max_retries = 3
+        retry_delay = 2
+        
+        for attempt in range(max_retries):
+            try:
+                print(f"Attempting to print QR code (attempt {attempt + 1}/{max_retries})")
+                response = requests.post(
+                    f"{RASPBERRY_PI_URL}/print-qr",
+                    json=printer_data,
+                    headers={'Content-Type': 'application/json'},
+                    timeout=15  # Increased timeout for stability
+                )
 
-            if response.status_code == 200:
-                return jsonify({
-                    'message': f'QR code print request sent for order {order_id}',
-                    'printer_response': response.json()
-                }), 200
-            else:
-                return jsonify({
-                    'error': 'Failed to print QR code',
-                    'details': response.text
-                }), response.status_code
+                if response.status_code == 200:
+                    response_data = response.json()
+                    return jsonify({
+                        'message': f'QR code printed successfully for order {order_id}',
+                        'printer_response': response_data,
+                        'order_number': printer_data['orderNumber']
+                    }), 200
+                elif response.status_code == 503:
+                    # Printer unavailable - don't retry
+                    return jsonify({
+                        'error': 'Printer is not available',
+                        'details': 'Please check if the thermal printer is connected to the Raspberry Pi'
+                    }), 503
+                else:
+                    # Other errors - might be temporary, so retry
+                    if attempt == max_retries - 1:  # Last attempt
+                        return jsonify({
+                            'error': 'Failed to print QR code',
+                            'details': response.text,
+                            'status_code': response.status_code
+                        }), response.status_code
+                    else:
+                        print(f"Print attempt failed with status {response.status_code}, retrying...")
+                        time.sleep(retry_delay)
 
-        except requests.RequestException as e:
-            error_msg = str(e)
-            # Check if it's a connection error
-            if "Connection refused" in error_msg:
-                return jsonify({
-                    'error': 'Printer service is not available',
-                    'details': 'Please check if the Raspberry Pi printer service is running'
-                }), 503
-            return jsonify({
-                'error': 'Failed to connect to printer service',
-                'details': error_msg
-            }), 503
+            except requests.exceptions.ConnectTimeout:
+                error_msg = "Connection to Raspberry Pi timed out"
+                if attempt == max_retries - 1:
+                    return jsonify({
+                        'error': 'Printer service timeout',
+                        'details': error_msg
+                    }), 504
+                else:
+                    print(f"Connection timeout (attempt {attempt + 1}), retrying...")
+                    time.sleep(retry_delay)
+                    
+            except requests.exceptions.ConnectionError:
+                error_msg = "Cannot connect to Raspberry Pi printer service"
+                if attempt == max_retries - 1:
+                    return jsonify({
+                        'error': 'Printer service is not available',
+                        'details': 'Please check if the Raspberry Pi printer service is running at ' + RASPBERRY_PI_URL
+                    }), 503
+                else:
+                    print(f"Connection error (attempt {attempt + 1}), retrying...")
+                    time.sleep(retry_delay)
+                    
+            except requests.RequestException as e:
+                error_msg = str(e)
+                if attempt == max_retries - 1:
+                    return jsonify({
+                        'error': 'Failed to connect to printer service',
+                        'details': error_msg
+                    }), 500
+                else:
+                    print(f"Request error (attempt {attempt + 1}): {error_msg}, retrying...")
+                    time.sleep(retry_delay)
 
     except Exception as e:
         return jsonify({

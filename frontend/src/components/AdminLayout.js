@@ -28,7 +28,7 @@ import Reports from '../pages/Reports';
 import Settings from '../pages/Settings';
 import Orders from '../pages/Orders';
 import Scanner from '../pages/Scanner';
-import WebSocketTest from '../pages/WebSocketTest';
+import MQTTTest from '../pages/MQTTTest';
 
 const drawerWidth = 280;
 
@@ -141,7 +141,7 @@ export default function AdminLayout() {
           <Route path="" element={<Dashboard />} />
           <Route path="orders" element={<Orders />} />
           <Route path="scanner" element={<Scanner />} />
-          <Route path="websocket-test" element={<WebSocketTest />} />
+          <Route path="mqtt-test" element={<MQTTTest />} />
           <Route path="parcels" element={<Parcels />} />
           <Route path="shipping" element={<Shipping />} />
           <Route path="reports" element={<Reports />} />

@@ -14,10 +14,22 @@ import {
   Alert,
   Snackbar,
   Button,
-  Stack
+  Stack,
+  Chip,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  LinearProgress
 } from '@mui/material';
-import { QrCode2 as QrCodeIcon } from '@mui/icons-material';
+import { 
+  QrCode2 as QrCodeIcon, 
+  Print as PrintIcon,
+  Wifi as WifiIcon,
+  WifiOff as WifiOffIcon 
+} from '@mui/icons-material';
 import axios from 'axios';
+import raspberryPiWebSocketService from '../services/raspberryPiWebSocketService';
 
 const Orders = () => {
   const [orders, setOrders] = useState([]);
@@ -29,6 +41,107 @@ const Orders = () => {
     message: '',
     severity: 'success'
   });
+
+  // WebSocket and printing states
+  const [wsConnected, setWsConnected] = useState(false);
+  const [connectingWs, setConnectingWs] = useState(false);
+  const [printingOrders, setPrintingOrders] = useState(new Set());
+  const [printDialog, setPrintDialog] = useState({
+    open: false,
+    orderId: null,
+    status: '',
+    progress: 0
+  });
+
+  // Initialize WebSocket connection
+  useEffect(() => {
+    const initializeWebSocket = async () => {
+      setConnectingWs(true);
+      try {
+        await raspberryPiWebSocketService.connect();
+        setWsConnected(true);
+        
+        // Set up event listeners
+        raspberryPiWebSocketService.on('print_status', handlePrintStatus);
+        raspberryPiWebSocketService.on('print_success', handlePrintSuccess);
+        raspberryPiWebSocketService.on('print_error', handlePrintError);
+        
+      } catch (error) {
+        console.warn('WebSocket connection failed, will use HTTP fallback:', error);
+        setWsConnected(false);
+      } finally {
+        setConnectingWs(false);
+      }
+    };
+
+    initializeWebSocket();
+
+    // Cleanup
+    return () => {
+      raspberryPiWebSocketService.off('print_status', handlePrintStatus);
+      raspberryPiWebSocketService.off('print_success', handlePrintSuccess);
+      raspberryPiWebSocketService.off('print_error', handlePrintError);
+    };
+  }, []);
+
+  // WebSocket event handlers
+  const handlePrintStatus = (data) => {
+    if (data.order_number) {
+      let progress = 0;
+      switch (data.status) {
+        case 'processing': progress = 25; break;
+        case 'creating': progress = 50; break;
+        case 'printing': progress = 75; break;
+        default: progress = 0;
+      }
+      
+      setPrintDialog(prev => ({
+        ...prev,
+        status: data.message,
+        progress: progress
+      }));
+    }
+  };
+
+  const handlePrintSuccess = (data) => {
+    setPrintingOrders(prev => {
+      const newSet = new Set(prev);
+      newSet.delete(data.order_number);
+      return newSet;
+    });
+    
+    setPrintDialog(prev => ({
+      ...prev,
+      status: 'Print completed successfully!',
+      progress: 100
+    }));
+
+    setTimeout(() => {
+      setPrintDialog({ open: false, orderId: null, status: '', progress: 0 });
+    }, 2000);
+
+    setSnackbar({
+      open: true,
+      message: `QR code printed successfully for order ${data.order_number}`,
+      severity: 'success'
+    });
+  };
+
+  const handlePrintError = (data) => {
+    setPrintingOrders(prev => {
+      const newSet = new Set(prev);
+      newSet.delete(data.order_number);
+      return newSet;
+    });
+    
+    setPrintDialog({ open: false, orderId: null, status: '', progress: 0 });
+    
+    setSnackbar({
+      open: true,
+      message: data.error || 'Failed to print QR code',
+      severity: 'error'
+    });
+  };
 
   useEffect(() => {
     fetchOrders();
@@ -51,21 +164,107 @@ const Orders = () => {
   };
 
   const handlePrintQRCode = async (orderId) => {
-    try {
-      const response = await axios.post('http://192.168.100.61:5000/api/print-qr', {
-        orderId: orderId.toString()
+    // Prevent multiple simultaneous prints for the same order
+    if (printingOrders.has(orderId)) {
+      setSnackbar({
+        open: true,
+        message: 'Print already in progress for this order',
+        severity: 'warning'
       });
+      return;
+    }
+
+    // Find the order data
+    const order = orders.find(o => o.id === orderId);
+    if (!order) {
+      setSnackbar({
+        open: true,
+        message: 'Order not found',
+        severity: 'error'
+      });
+      return;
+    }
+
+    // Add to printing set
+    setPrintingOrders(prev => new Set([...prev, orderId]));
+
+    // Show progress dialog for WebSocket printing
+    if (wsConnected) {
+      setPrintDialog({
+        open: true,
+        orderId: orderId,
+        status: 'Initializing print request...',
+        progress: 0
+      });
+    }
+
+    try {
+      if (wsConnected) {
+        // Use WebSocket for better performance on slow connections
+        console.log('Using WebSocket for printing');
+        
+        const orderData = {
+          orderNumber: order.order_number,
+          customerName: order.customer_name,
+          productName: order.product_name,
+          amount: `₱${order.amount.toFixed(2)}`,
+          date: order.date,
+          address: order.address,
+          contactNumber: order.contact_number,
+          email: order.email || ''
+        };
+
+        await raspberryPiWebSocketService.printQRCode(orderData);
+        
+      } else {
+        // Fallback to HTTP
+        console.log('Using HTTP fallback for printing');
+        
+        const response = await axios.post('http://192.168.100.61:5000/api/print-qr', {
+          orderId: orderId.toString()
+        }, {
+          timeout: 15000 // Increased timeout for Raspberry Pi browser
+        });
+        
+        // Remove from printing set on HTTP success
+        setPrintingOrders(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(orderId);
+          return newSet;
+        });
+        
+        setSnackbar({
+          open: true,
+          message: 'QR code print request sent successfully (HTTP)',
+          severity: 'success'
+        });
+      }
+    } catch (error) {
+      console.error('Error printing QR code:', error);
+      
+      // Remove from printing set on error
+      setPrintingOrders(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(orderId);
+        return newSet;
+      });
+
+      // Close progress dialog on error
+      setPrintDialog({ open: false, orderId: null, status: '', progress: 0 });
+      
+      let errorMessage = 'Failed to print QR code';
+      
+      if (error.response?.data?.error) {
+        errorMessage = error.response.data.error;
+      } else if (error.message) {
+        errorMessage = error.message;
+      } else if (error.code === 'ECONNABORTED') {
+        errorMessage = 'Print request timed out - please try again';
+      }
       
       setSnackbar({
         open: true,
-        message: 'QR code print request sent successfully',
-        severity: 'success'
-      });
-    } catch (error) {
-      console.error('Error printing QR code:', error);
-      setSnackbar({
-        open: true,
-        message: error.response?.data?.error || 'Failed to print QR code',
+        message: errorMessage,
         severity: 'error'
       });
     }
@@ -94,9 +293,35 @@ const Orders = () => {
 
   return (
     <Box sx={{ p: 3 }}>
-      <Typography variant="h4" gutterBottom>
-        Orders
-      </Typography>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+        <Typography variant="h4">
+          Orders
+        </Typography>
+        
+        {/* Connection Status */}
+        <Stack direction="row" spacing={1} alignItems="center">
+          {connectingWs && (
+            <Chip 
+              icon={<CircularProgress size={16} />}
+              label="Connecting..." 
+              size="small" 
+              color="info"
+            />
+          )}
+          <Chip
+            icon={wsConnected ? <WifiIcon /> : <WifiOffIcon />}
+            label={wsConnected ? 'WebSocket Ready' : 'HTTP Fallback'}
+            color={wsConnected ? 'success' : 'warning'}
+            size="small"
+          />
+          <Chip
+            icon={<PrintIcon />}
+            label={`${printingOrders.size} printing`}
+            color={printingOrders.size > 0 ? 'primary' : 'default'}
+            size="small"
+          />
+        </Stack>
+      </Box>
       
       <Paper sx={{ width: '100%', overflow: 'hidden' }}>
         <TableContainer sx={{ maxHeight: 440 }}>
@@ -136,10 +361,12 @@ const Orders = () => {
                         <Button
                           variant="contained"
                           size="small"
-                          startIcon={<QrCodeIcon />}
+                          startIcon={printingOrders.has(order.id) ? <CircularProgress size={16} /> : <QrCodeIcon />}
                           onClick={() => handlePrintQRCode(order.id)}
+                          disabled={printingOrders.has(order.id)}
+                          color={printingOrders.has(order.id) ? "secondary" : "primary"}
                         >
-                          Print QR
+                          {printingOrders.has(order.id) ? 'Printing...' : 'Print QR'}
                         </Button>
                       </Stack>
                     </TableCell>
@@ -180,6 +407,51 @@ const Orders = () => {
           {snackbar.message}
         </Alert>
       </Snackbar>
+
+      {/* Print Progress Dialog */}
+      <Dialog 
+        open={printDialog.open} 
+        onClose={() => {}} 
+        disableEscapeKeyDown 
+        maxWidth="sm" 
+        fullWidth
+      >
+        <DialogTitle>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <PrintIcon />
+            Printing QR Code
+          </Box>
+        </DialogTitle>
+        <DialogContent>
+          <Box sx={{ mb: 2 }}>
+            <Typography variant="body2" color="text.secondary" gutterBottom>
+              Order ID: {printDialog.orderId}
+            </Typography>
+            <Typography variant="body1" gutterBottom>
+              {printDialog.status}
+            </Typography>
+            <LinearProgress 
+              variant="determinate" 
+              value={printDialog.progress} 
+              sx={{ mt: 2 }}
+            />
+            <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+              {printDialog.progress}% complete
+            </Typography>
+          </Box>
+          <Alert severity="info" sx={{ mt: 2 }}>
+            <Typography variant="body2">
+              Using WebSocket connection for optimal performance on slow networks.
+              This dialog will close automatically when printing is complete.
+            </Typography>
+          </Alert>
+        </DialogContent>
+        <DialogActions>
+          <Typography variant="caption" color="text.secondary">
+            Please wait while printing...
+          </Typography>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };

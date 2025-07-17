@@ -34,8 +34,12 @@ CORS(app,
      allow_headers=["Content-Type", "Authorization"],
      supports_credentials=True)  # Allow credentials
 
-# Initialize SocketIO with CORS enabled
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+# Initialize SocketIO with minimal configuration to avoid conflicts
+socketio = SocketIO(app, 
+                   cors_allowed_origins="*", 
+                   async_mode='threading',
+                   logger=True,  # Enable logging for debugging
+                   engineio_logger=True)
 
 printer = ReceiptPrinter()
 camera = CameraManager()
@@ -212,43 +216,71 @@ def print_qr():
         order_data = request.get_json()
         
         if not order_data:
+            logger.warning("Print request received with no data")
             return jsonify({
                 'error': 'No order data provided'
             }), 400
 
+        logger.info(f"Print request received for order: {order_data.get('orderNumber', 'Unknown')}")
+
         # Check if printer is available
         if not printer.check_printer():
+            logger.error("Printer is not available")
             return jsonify({
                 'error': 'Printer is not available',
-                'details': 'Please check printer connection'
+                'details': 'Please check printer connection and USB cable'
             }), 503
 
-        # Required fields check
-        required_fields = ['orderNumber', 'customerName', 'email', 'productName', 'amount', 'date']
-        missing_fields = [field for field in required_fields if field not in order_data]
+        # Required fields check (made more flexible)
+        required_fields = ['orderNumber', 'customerName', 'productName', 'amount', 'date']
+        missing_fields = [field for field in required_fields if not order_data.get(field)]
         
         if missing_fields:
+            logger.error(f"Missing required fields: {missing_fields}")
             return jsonify({
                 'error': 'Missing required fields',
-                'missing_fields': missing_fields
+                'missing_fields': missing_fields,
+                'received_data': list(order_data.keys())
+            }), 400
+
+        # Validate and sanitize data
+        try:
+            sanitized_data = {
+                'orderNumber': str(order_data['orderNumber']).strip(),
+                'customerName': str(order_data['customerName']).strip(),
+                'productName': str(order_data['productName']).strip(),
+                'amount': str(order_data['amount']).strip(),
+                'date': str(order_data['date']).strip(),
+                'address': str(order_data.get('address', 'N/A')).strip(),
+                'contactNumber': str(order_data.get('contactNumber', 'N/A')).strip(),
+                'email': str(order_data.get('email', '')).strip()
+            }
+        except Exception as e:
+            logger.error(f"Data validation failed: {e}")
+            return jsonify({
+                'error': 'Invalid data format',
+                'details': str(e)
             }), 400
 
         # Create receipt image
-        receipt = printer.create_receipt(order_data)
+        receipt = printer.create_receipt(sanitized_data)
         
         if not receipt:
+            logger.error("Failed to create receipt image")
             return jsonify({
-                'error': 'Failed to create receipt'
+                'error': 'Failed to create receipt',
+                'details': 'Receipt generation failed'
             }), 500
 
         # Print receipt
         success, message = printer.print_receipt(receipt)
         
         if success:
-            logger.info(f"Successfully printed receipt for order {order_data['orderNumber']}")
+            logger.info(f"Successfully printed receipt for order {sanitized_data['orderNumber']}")
             return jsonify({
                 'message': 'Receipt printed successfully',
-                'order_number': order_data['orderNumber']
+                'order_number': sanitized_data['orderNumber'],
+                'timestamp': datetime.now().isoformat()
             })
         else:
             logger.error(f"Failed to print receipt: {message}")
@@ -258,10 +290,11 @@ def print_qr():
             }), 500
 
     except Exception as e:
-        logger.error(f"Error processing print request: {str(e)}")
+        logger.error(f"Unexpected error processing print request: {str(e)}", exc_info=True)
         return jsonify({
             'error': 'Internal server error',
-            'details': str(e)
+            'details': str(e),
+            'timestamp': datetime.now().isoformat()
         }), 500
 
 def generate_frames():
@@ -436,15 +469,21 @@ def periodic_status_broadcast():
         
         time.sleep(5)  # Broadcast status every 5 seconds
 
-# SocketIO event handlers
+# SocketIO event handlers with better error handling
 @socketio.on('connect')
 def handle_connect():
-    logger.info('Client connected to Raspberry Pi WebSocket')
-    emit('camera_status', {'status': 'connected'})
+    try:
+        logger.info('Client connected to Raspberry Pi WebSocket')
+        emit('camera_status', {'status': 'connected'})
+    except Exception as e:
+        logger.error(f"Error in connect handler: {e}")
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    logger.info('Client disconnected from Raspberry Pi WebSocket')
+    try:
+        logger.info('Client disconnected from Raspberry Pi WebSocket')
+    except Exception as e:
+        logger.error(f"Error in disconnect handler: {e}")
 
 @socketio.on('start_camera')
 def handle_start_camera():
@@ -454,6 +493,7 @@ def handle_start_camera():
         else:
             emit('camera_error', {'error': 'Failed to start camera'})
     except Exception as e:
+        logger.error(f"Error in start_camera handler: {e}")
         emit('camera_error', {'error': str(e)})
 
 @socketio.on('stop_camera')
@@ -464,6 +504,7 @@ def handle_stop_camera():
         else:
             emit('camera_error', {'error': 'Failed to stop camera'})
     except Exception as e:
+        logger.error(f"Error in stop_camera handler: {e}")
         emit('camera_error', {'error': str(e)})
 
 @socketio.on('get_system_status')
@@ -475,6 +516,7 @@ def handle_get_system_status():
             'timestamp': datetime.now().isoformat()
         })
     except Exception as e:
+        logger.error(f"Error in get_system_status handler: {e}")
         emit('camera_error', {'error': str(e)})
 
 @socketio.on('get_mqtt_status')
@@ -482,6 +524,7 @@ def handle_get_mqtt_status():
     try:
         emit('mqtt_status', mqtt_listener.get_status())
     except Exception as e:
+        logger.error(f"Error in get_mqtt_status handler: {e}")
         emit('mqtt_error', {'error': str(e)})
 
 @socketio.on('restart_mqtt')
@@ -496,6 +539,143 @@ def handle_restart_mqtt():
         })
     except Exception as e:
         emit('mqtt_error', {'error': str(e)})
+
+@socketio.on('print_qr')
+def handle_print_qr(data):
+    """WebSocket handler for QR printing - better for slow connections"""
+    try:
+        logger.info(f"WebSocket print request received for order: {data.get('orderNumber', 'Unknown')}")
+        
+        # Emit progress status
+        emit('print_status', {
+            'status': 'processing',
+            'message': 'Processing print request...',
+            'order_number': data.get('orderNumber')
+        })
+
+        # Validate input data
+        if not data:
+            emit('print_error', {
+                'error': 'No order data provided',
+                'order_number': data.get('orderNumber')
+            })
+            return
+
+        # Check if printer is available
+        if not printer.check_printer():
+            logger.error("Printer is not available")
+            emit('print_error', {
+                'error': 'Printer is not available',
+                'details': 'Please check printer connection and USB cable',
+                'order_number': data.get('orderNumber')
+            })
+            return
+
+        # Required fields check
+        required_fields = ['orderNumber', 'customerName', 'productName', 'amount', 'date']
+        missing_fields = [field for field in required_fields if not data.get(field)]
+        
+        if missing_fields:
+            logger.error(f"Missing required fields: {missing_fields}")
+            emit('print_error', {
+                'error': 'Missing required fields',
+                'missing_fields': missing_fields,
+                'received_data': list(data.keys()),
+                'order_number': data.get('orderNumber')
+            })
+            return
+
+        # Emit progress status
+        emit('print_status', {
+            'status': 'creating',
+            'message': 'Creating receipt image...',
+            'order_number': data.get('orderNumber')
+        })
+
+        # Validate and sanitize data
+        try:
+            sanitized_data = {
+                'orderNumber': str(data['orderNumber']).strip(),
+                'customerName': str(data['customerName']).strip(),
+                'productName': str(data['productName']).strip(),
+                'amount': str(data['amount']).strip(),
+                'date': str(data['date']).strip(),
+                'address': str(data.get('address', 'N/A')).strip(),
+                'contactNumber': str(data.get('contactNumber', 'N/A')).strip(),
+                'email': str(data.get('email', '')).strip()
+            }
+        except Exception as e:
+            logger.error(f"Data validation failed: {e}")
+            emit('print_error', {
+                'error': 'Invalid data format',
+                'details': str(e),
+                'order_number': data.get('orderNumber')
+            })
+            return
+
+        # Create receipt image
+        receipt = printer.create_receipt(sanitized_data)
+        
+        if not receipt:
+            logger.error("Failed to create receipt image")
+            emit('print_error', {
+                'error': 'Failed to create receipt',
+                'details': 'Receipt generation failed',
+                'order_number': data.get('orderNumber')
+            })
+            return
+
+        # Emit progress status
+        emit('print_status', {
+            'status': 'printing',
+            'message': 'Sending to printer...',
+            'order_number': data.get('orderNumber')
+        })
+
+        # Print receipt
+        success, message = printer.print_receipt(receipt)
+        
+        if success:
+            logger.info(f"Successfully printed receipt for order {sanitized_data['orderNumber']}")
+            emit('print_success', {
+                'message': 'Receipt printed successfully',
+                'order_number': sanitized_data['orderNumber'],
+                'timestamp': datetime.now().isoformat()
+            })
+        else:
+            logger.error(f"Failed to print receipt: {message}")
+            emit('print_error', {
+                'error': 'Failed to print receipt',
+                'details': message,
+                'order_number': data.get('orderNumber')
+            })
+
+    except Exception as e:
+        logger.error(f"Unexpected error in WebSocket print request: {str(e)}", exc_info=True)
+        emit('print_error', {
+            'error': 'Internal server error',
+            'details': str(e),
+            'timestamp': datetime.now().isoformat(),
+            'order_number': data.get('orderNumber') if data else 'Unknown'
+        })
+
+@socketio.on('check_printer_status')
+def handle_check_printer_status():
+    """WebSocket handler to check printer status"""
+    try:
+        is_available = printer.check_printer()
+        emit('printer_status', {
+            'available': is_available,
+            'device': printer.printer_device,
+            'timestamp': datetime.now().isoformat()
+        })
+    except Exception as e:
+        logger.error(f"Error checking printer status: {e}")
+        emit('printer_status', {
+            'available': False,
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        })
 
 @app.route('/debug/simulate-qr-scan', methods=['POST'])
 def simulate_qr_scan():
@@ -671,6 +851,11 @@ if __name__ == '__main__':
     except Exception as e:
         logger.error(f"Failed to start MQTT listener at startup: {str(e)}")
     
-    # Run the server with SocketIO
+    # Run the server with SocketIO - simplified configuration
     logger.info("Starting Flask-SocketIO server with integrated MQTT listener")
-    socketio.run(app, host='0.0.0.0', port=5001, debug=False, allow_unsafe_werkzeug=True)
+    
+    # Simple SocketIO startup to avoid Werkzeug conflicts
+    socketio.run(app, 
+                host='0.0.0.0', 
+                port=5001, 
+                debug=False)

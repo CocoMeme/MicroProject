@@ -20,7 +20,7 @@ import {
   ChevronLeft as ChevronLeftIcon,
   ShoppingCart as OrdersIcon,
   QrCodeScanner as ScannerIcon,
-  Wifi as WebSocketIcon,
+  Router as MQTTIcon,
 } from '@mui/icons-material';
 import { useLocation, useNavigate } from 'react-router-dom';
 
@@ -28,7 +28,7 @@ const menuItems = [
   { text: 'Dashboard', icon: <DashboardIcon />, path: '/admin' },
   { text: 'Orders', icon: <OrdersIcon />, path: '/admin/orders' },
   { text: 'Scanner', icon: <ScannerIcon />, path: '/admin/scanner' },
-  { text: 'WebSocket Test', icon: <WebSocketIcon />, path: '/admin/websocket-test' },
+  { text: 'MQTT Test', icon: <MQTTIcon />, path: '/admin/mqtt-test' },
   { text: 'Parcels', icon: <InventoryIcon />, path: '/admin/parcels' },
   { text: 'Shipping', icon: <ShippingIcon />, path: '/admin/shipping' },
   { text: 'Reports', icon: <ReportsIcon />, path: '/admin/reports' },

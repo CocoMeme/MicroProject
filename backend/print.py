@@ -3,31 +3,75 @@ import qrcode
 import json
 from datetime import datetime
 import os
-import pygame  # <-- added
+import pygame
+import threading
+import time
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class ReceiptPrinter:
     def __init__(self):
         self.printer_device = '/dev/usb/lp0'
+        # Initialize pygame mixer once
+        self._init_pygame()
+        self._init_fonts()
+        # Add thread lock for printer access
+        self.printer_lock = threading.Lock()
+        
+    def _init_pygame(self):
+        """Initialize pygame mixer safely"""
+        try:
+            if not pygame.mixer.get_init():
+                pygame.mixer.init()
+            logger.info("Pygame mixer initialized successfully")
+        except Exception as e:
+            logger.warning(f"Failed to initialize pygame mixer: {e}")
+            
+    def _init_fonts(self):
+        """Initialize fonts with fallbacks"""
         try:
             self.font_regular = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16)
             self.font_title = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 18)
             self.font_large = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 24)
-        except:
+            logger.info("Custom fonts loaded successfully")
+        except Exception as e:
+            logger.warning(f"Failed to load custom fonts, using default: {e}")
             self.font_regular = ImageFont.load_default()
             self.font_title = ImageFont.load_default()
             self.font_large = ImageFont.load_default()
 
     def create_receipt(self, order_data):
+        """Create receipt image with better error handling"""
         try:
-            qr = qrcode.QRCode(version=1, box_size=16, border=4)
-            qr.add_data(str(order_data['orderNumber']))
-            qr.make(fit=True)
-            qr_img = qr.make_image(fill_color="black", back_color="white").convert('RGB')
+            # Validate input data
+            if not order_data or not isinstance(order_data, dict):
+                raise ValueError("Invalid order data provided")
+                
+            # Check required fields
+            required_fields = ['orderNumber', 'customerName', 'productName', 'amount', 'date']
+            missing_fields = [field for field in required_fields if not order_data.get(field)]
+            if missing_fields:
+                raise ValueError(f"Missing required fields: {missing_fields}")
 
+            # Create QR code with error handling
+            try:
+                qr = qrcode.QRCode(version=1, box_size=16, border=4)
+                qr.add_data(str(order_data['orderNumber']))
+                qr.make(fit=True)
+                qr_img = qr.make_image(fill_color="black", back_color="white").convert('RGB')
+            except Exception as e:
+                logger.error(f"Failed to create QR code: {e}")
+                raise ValueError(f"QR code generation failed: {e}")
+
+            # Resize QR code
             qr_width = 400
             qr_height = int(qr_width * qr_img.height / qr_img.width)
             qr_img = qr_img.resize((qr_width, qr_height))
 
+            # Calculate layout dimensions
             text_height_regular = 25
             text_height_large = 35
             spacing = 15
@@ -37,7 +81,7 @@ class ReceiptPrinter:
             if order_data.get('email') and order_data['email'].strip():
                 header_height += text_height_regular
             product_section_height = text_height_large * 2
-            footer_height = text_height_regular  # Updated back to original for just date
+            footer_height = text_height_regular
 
             total_height = (
                 spacing + header_height + spacing +
@@ -45,80 +89,150 @@ class ReceiptPrinter:
                 footer_height + spacing + qr_height + spacing
             )
 
+            # Create receipt image
             receipt = Image.new('RGB', (384, total_height), 'white')
             draw = ImageDraw.Draw(receipt)
             y = spacing
 
-            draw.text((10, y), f"Order-id: {order_data['orderNumber']}", font=self.font_title, fill='black')
+            # Draw text content with safe string handling
+            draw.text((10, y), f"Order-id: {str(order_data['orderNumber'])}", font=self.font_title, fill='black')
             y += text_height_regular
-            draw.text((10, y), f"Customer: {order_data['customerName']}", font=self.font_regular, fill='black')
+            draw.text((10, y), f"Customer: {str(order_data['customerName'])}", font=self.font_regular, fill='black')
             y += text_height_regular
+            
             # Only show email if it exists and is not empty
             if order_data.get('email') and order_data['email'].strip():
-                draw.text((10, y), f"Email: {order_data['email']}", font=self.font_regular, fill='black')
+                draw.text((10, y), f"Email: {str(order_data['email'])}", font=self.font_regular, fill='black')
                 y += text_height_regular
-            draw.text((10, y), f"Contact: {order_data.get('contactNumber', 'N/A')}", font=self.font_regular, fill='black')
+                
+            draw.text((10, y), f"Contact: {str(order_data.get('contactNumber', 'N/A'))}", font=self.font_regular, fill='black')
             y += text_height_regular
-            draw.text((10, y), f"Address: {order_data['address']}", font=self.font_regular, fill='black')
+            draw.text((10, y), f"Address: {str(order_data['address'])}", font=self.font_regular, fill='black')
             y += text_height_regular + spacing
 
-            draw.text((10, y), f"Product: {order_data['productName']}", font=self.font_large, fill='black')
+            draw.text((10, y), f"Product: {str(order_data['productName'])}", font=self.font_large, fill='black')
             y += text_height_large
-            draw.text((10, y), f"Amount: {order_data['amount']}", font=self.font_large, fill='black')
+            draw.text((10, y), f"Amount: {str(order_data['amount'])}", font=self.font_large, fill='black')
             y += text_height_large + spacing
 
-            draw.text((10, y), f"Date: {order_data['date']}", font=self.font_regular, fill='black')
+            draw.text((10, y), f"Date: {str(order_data['date'])}", font=self.font_regular, fill='black')
             y += text_height_regular + spacing
 
+            # Draw separator line
             draw.line([(10, y), (374, y)], fill='black', width=1)
             y += spacing
 
+            # Paste QR code
             receipt.paste(qr_img, (0, y))
+            
+            logger.info(f"Receipt created successfully for order {order_data['orderNumber']}")
             return receipt
 
         except Exception as e:
-            print(f"Error creating receipt: {e}")
+            logger.error(f"Error creating receipt: {e}")
             return None
 
-    def print_receipt(self, receipt):
-        # ✅ Play sound after successful print
-        pygame.mixer.init()
-        sound = pygame.mixer.Sound("/home/test/Desktop/sound/success.mp3")
-        sound.play()
-
-        try:
-            receipt = receipt.convert('1')
-
-            with open(self.printer_device, 'wb') as p:
-                p.write(b'\x1b\x40')  # ESC @
-                p.write(b'\x1b\x61\x01')  # Center alignment
-
-                width_bytes = (receipt.width + 7) // 8
-                p.write(b'\x1d\x76\x30\x00')
-                p.write(bytes([width_bytes & 0xff, width_bytes >> 8]))
-                p.write(bytes([receipt.height & 0xff, receipt.height >> 8]))
-
-                pixels = receipt.load()
-                for y in range(receipt.height):
-                    for x in range(0, receipt.width, 8):
-                        byte = 0
-                        for bit in range(min(8, receipt.width - x)):
-                            if pixels[x + bit, y] == 0:
-                                byte |= (1 << (7 - bit))
-                        p.write(bytes([byte]))
-
-                p.write(b'\n\n\n\n')
-                p.write(b'\x1d\x56\x41\x03')  # Cut
-
-            return True, "Print successful"
-
-        except Exception as e:
-            print(f"Error printing: {e}")
+    def _play_success_sound(self):
+        """Play success sound in a separate thread to avoid blocking"""
+        def play_sound():
             try:
-                receipt.save('last_failed_print.png')
-                return False, f"Print failed (saved as last_failed_print.png): {str(e)}"
-            except:
+                if pygame.mixer.get_init():
+                    sound_path = "/home/test/Desktop/sound/success.mp3"
+                    if os.path.exists(sound_path):
+                        sound = pygame.mixer.Sound(sound_path)
+                        sound.play()
+                        logger.info("Success sound played")
+                    else:
+                        logger.warning(f"Sound file not found: {sound_path}")
+                else:
+                    logger.warning("Pygame mixer not initialized")
+            except Exception as e:
+                logger.error(f"Failed to play success sound: {e}")
+        
+        # Play sound in background thread to avoid blocking
+        threading.Thread(target=play_sound, daemon=True).start()
+
+    def print_receipt(self, receipt):
+        """Print receipt with thread safety and better error handling"""
+        if not receipt:
+            return False, "No receipt to print"
+            
+        # Use thread lock to prevent concurrent printer access
+        with self.printer_lock:
+            try:
+                # Check printer availability
+                if not self.check_printer():
+                    return False, "Printer device not available"
+
+                # Convert to 1-bit image for thermal printer
+                receipt_bw = receipt.convert('1')
+                
+                # Save backup copy before printing
+                backup_path = f"/tmp/receipt_backup_{int(time.time())}.png"
+                try:
+                    receipt.save(backup_path)
+                    logger.info(f"Receipt backup saved to {backup_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to save backup: {e}")
+
+                # Print with timeout and retries
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        with open(self.printer_device, 'wb') as p:
+                            # ESC/POS commands
+                            p.write(b'\x1b\x40')  # ESC @ - Initialize printer
+                            p.write(b'\x1b\x61\x01')  # Center alignment
+
+                            # Calculate image dimensions
+                            width_bytes = (receipt_bw.width + 7) // 8
+                            p.write(b'\x1d\x76\x30\x00')  # Print raster bit image
+                            p.write(bytes([width_bytes & 0xff, width_bytes >> 8]))
+                            p.write(bytes([receipt_bw.height & 0xff, receipt_bw.height >> 8]))
+
+                            # Send image data
+                            pixels = receipt_bw.load()
+                            for y in range(receipt_bw.height):
+                                for x in range(0, receipt_bw.width, 8):
+                                    byte = 0
+                                    for bit in range(min(8, receipt_bw.width - x)):
+                                        if pixels[x + bit, y] == 0:  # Black pixel
+                                            byte |= (1 << (7 - bit))
+                                    p.write(bytes([byte]))
+
+                            # Feed paper and cut
+                            p.write(b'\n\n\n\n')
+                            p.write(b'\x1d\x56\x41\x03')  # Cut paper
+                            p.flush()  # Ensure all data is sent
+
+                        # If we get here, printing succeeded
+                        logger.info("Receipt printed successfully")
+                        self._play_success_sound()
+                        return True, "Print successful"
+
+                    except (IOError, OSError) as e:
+                        logger.warning(f"Print attempt {attempt + 1} failed: {e}")
+                        if attempt == max_retries - 1:
+                            # Save failed print for debugging
+                            try:
+                                receipt.save('last_failed_print.png')
+                                logger.info("Failed print saved as last_failed_print.png")
+                            except Exception as save_e:
+                                logger.error(f"Failed to save failed print: {save_e}")
+                            return False, f"Print failed after {max_retries} attempts: {str(e)}"
+                        else:
+                            time.sleep(1)  # Wait before retry
+
+            except Exception as e:
+                logger.error(f"Unexpected error during printing: {e}")
                 return False, f"Print failed: {str(e)}"
 
     def check_printer(self):
-        return os.path.exists(self.printer_device)
+        """Check if printer device is available"""
+        try:
+            is_available = os.path.exists(self.printer_device)
+            logger.debug(f"Printer check: {self.printer_device} - {'Available' if is_available else 'Not available'}")
+            return is_available
+        except Exception as e:
+            logger.error(f"Error checking printer: {e}")
+            return False
