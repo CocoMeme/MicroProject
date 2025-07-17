@@ -28,8 +28,8 @@ import FullscreenIcon from '@mui/icons-material/Fullscreen';
 import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
 import websocketService from '../services/websocketService';
 
-const RASPI_SERVER = 'http://192.168.100.63:5001'; // Your Raspberry Pi address
-const BACKEND_SERVER = 'http://192.168.100.61:5000'; // Your Flask backend
+const RASPI_SERVER = process.env.REACT_APP_RASPBERRY_PI_URL || 'http://192.168.100.63:5001'; // Your Raspberry Pi address
+const BACKEND_SERVER = process.env.REACT_APP_BACKEND_URL || 'http://192.168.100.61:5000'; // Your Flask backend
 
 export default function Scanner() {
   const [isStreaming, setIsStreaming] = useState(true); // Auto-start camera
