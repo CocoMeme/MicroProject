@@ -16,12 +16,16 @@ import {
   ListItem,
   ListItemText,
   Divider,
+  IconButton,
+  Tooltip,
 } from '@mui/material';
 import QrCodeScannerIcon from '@mui/icons-material/QrCodeScanner';
 import HistoryIcon from '@mui/icons-material/History';
 import QrCodeIcon from '@mui/icons-material/QrCode';
 import WifiIcon from '@mui/icons-material/Wifi';
 import WifiOffIcon from '@mui/icons-material/WifiOff';
+import FullscreenIcon from '@mui/icons-material/Fullscreen';
+import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
 import websocketService from '../services/websocketService';
 
 const RASPI_SERVER = 'http://192.168.100.63:5001'; // Your Raspberry Pi address
@@ -40,6 +44,7 @@ export default function Scanner() {
   
   // Modal states
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
+  const [fullscreenOpen, setFullscreenOpen] = useState(false);
 
   // WebSocket event handlers
   const handleCameraStatus = useCallback((data) => {
@@ -401,18 +406,51 @@ export default function Scanner() {
     return () => clearInterval(autoRefreshInterval);
   }, [wsConnected]);
 
+  // Handle ESC key for fullscreen exit
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape' && fullscreenOpen) {
+        setFullscreenOpen(false);
+      }
+    };
+
+    if (fullscreenOpen) {
+      document.addEventListener('keydown', handleKeyDown);
+    }
+
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [fullscreenOpen]);
+
   return (
-    <Box>
-      <Typography variant="h4" gutterBottom>
+    <Box sx={{ p: { xs: 1, sm: 0 } }}>
+      <Typography variant="h4" gutterBottom sx={{ fontSize: { xs: '1.5rem', sm: '2.125rem' } }}>
         QR Code Scanner
       </Typography>
 
-      <Grid container spacing={3}>
-        <Grid item xs={12} md={8}>
-          <Paper sx={{ p: 3, mb: 3 }}>
-            <Box sx={{ mb: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
-              <Typography variant="h6">Camera Feed (Auto-Active)</Typography>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+      <Grid container spacing={{ xs: 2, sm: 3 }}>
+        <Grid item xs={12} lg={8}>
+          <Paper sx={{ p: { xs: 2, sm: 3 }, mb: { xs: 2, sm: 3 } }}>
+            <Box sx={{ 
+              mb: 2, 
+              display: 'flex', 
+              justifyContent: 'space-between', 
+              alignItems: 'flex-start',
+              flexDirection: { xs: 'column', sm: 'row' },
+              gap: { xs: 2, sm: 1 }
+            }}>
+              <Typography variant="h6" sx={{ fontSize: { xs: '1.1rem', sm: '1.25rem' } }}>
+                Camera Feed (Auto-Active)
+              </Typography>
+              <Box sx={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                gap: 1,
+                flexWrap: 'wrap',
+                width: { xs: '100%', sm: 'auto' },
+                justifyContent: { xs: 'flex-start', sm: 'flex-end' }
+              }}>
                 {/* Connection Status */}
                 <Chip
                   icon={wsConnected ? <WifiIcon /> : <WifiOffIcon />}
@@ -445,25 +483,25 @@ export default function Scanner() {
             </Box>
 
             {!wsConnected && (
-              <Alert severity="info" sx={{ mb: 2 }}>
+              <Alert severity="info" sx={{ mb: 2, fontSize: { xs: '0.875rem', sm: '1rem' } }}>
                 Using HTTP fallback mode - WebSocket connection unavailable
               </Alert>
             )}
 
             {error && (
-              <Alert severity="error" sx={{ mb: 2 }}>
+              <Alert severity="error" sx={{ mb: 2, fontSize: { xs: '0.875rem', sm: '1rem' } }}>
                 {error}
               </Alert>
             )}
 
             {!status.online && (
-              <Alert severity="warning" sx={{ mb: 2 }}>
+              <Alert severity="warning" sx={{ mb: 2, fontSize: { xs: '0.875rem', sm: '1rem' } }}>
                 Raspberry Pi server is offline
               </Alert>
             )}
 
             {status.initialization_error && (
-              <Alert severity="error" sx={{ mb: 2 }}>
+              <Alert severity="error" sx={{ mb: 2, fontSize: { xs: '0.875rem', sm: '1rem' } }}>
                 Camera initialization error: {status.initialization_error}
               </Alert>
             )}
@@ -471,21 +509,44 @@ export default function Scanner() {
             <Box
               sx={{
                 width: '100%',
-                height: 480,
+                height: { xs: 300, sm: 400, md: 480 },
                 display: 'flex',
                 justifyContent: 'center',
                 alignItems: 'center',
                 bgcolor: 'black',
                 position: 'relative',
+                borderRadius: 1,
+                overflow: 'hidden',
               }}
             >
+              {/* Fullscreen Button - Always visible */}
+              <Tooltip title="Fullscreen">
+                <IconButton
+                  onClick={() => setFullscreenOpen(true)}
+                  sx={{
+                    position: 'absolute',
+                    top: 8,
+                    right: 8,
+                    color: 'white',
+                    bgcolor: 'rgba(0, 0, 0, 0.6)',
+                    zIndex: 1,
+                    '&:hover': {
+                      bgcolor: 'rgba(0, 0, 0, 0.8)',
+                    },
+                    transition: 'all 0.2s ease-in-out',
+                  }}
+                >
+                  <FullscreenIcon />
+                </IconButton>
+              </Tooltip>
+
               {isStreaming ? (
                 <img
                   src={`${RASPI_SERVER}/video_feed`}
                   alt="Camera Feed"
                   style={{
-                    maxWidth: '100%',
-                    maxHeight: '100%',
+                    width: '100%',
+                    height: '100%',
                     objectFit: 'contain',
                   }}
                 />
@@ -498,32 +559,54 @@ export default function Scanner() {
                     color: 'grey.500',
                   }}
                 >
-                  <QrCodeScannerIcon sx={{ fontSize: 60, mb: 2 }} />
-                  <Typography>Camera is stopped</Typography>
+                  <QrCodeScannerIcon sx={{ fontSize: { xs: 40, sm: 60 }, mb: 2 }} />
+                  <Typography variant="body1" sx={{ fontSize: { xs: '0.875rem', sm: '1rem' } }}>
+                    Camera is stopped
+                  </Typography>
                 </Box>
               )}
             </Box>
           </Paper>
         </Grid>
 
-        <Grid item xs={12} md={4}>
+        <Grid item xs={12} lg={4}>
           {/* Latest Scans List - Auto-refreshing */}
-          <Paper sx={{ p: 3, height: 'calc(100vh - 200px)', display: 'flex', flexDirection: 'column' }}>
-            <Typography variant="h6" gutterBottom>
-              Latest Scans
+          <Paper sx={{ 
+            p: { xs: 2, sm: 3 }, 
+            height: { xs: '60vh', sm: '70vh', lg: 'calc(100vh - 200px)' },
+            display: 'flex', 
+            flexDirection: 'column',
+            minHeight: { xs: '400px', sm: '500px' }
+          }}>
+            <Box sx={{ 
+              display: 'flex', 
+              alignItems: 'center', 
+              flexWrap: 'wrap',
+              gap: 1,
+              mb: 1
+            }}>
+              <Typography variant="h6" sx={{ fontSize: { xs: '1.1rem', sm: '1.25rem' } }}>
+                Latest Scans
+              </Typography>
               <Chip 
                 label={`${qrHistory.length} scans`} 
                 size="small" 
-                sx={{ ml: 2 }}
                 color={qrHistory.length > 0 ? 'primary' : 'default'}
               />
               {isLoadingHistory && (
-                <CircularProgress size={16} sx={{ ml: 1 }} />
+                <CircularProgress size={16} />
               )}
-            </Typography>
+            </Box>
             
             {/* Last refresh indicator */}
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+            <Box sx={{ 
+              display: 'flex', 
+              justifyContent: 'space-between', 
+              alignItems: 'center', 
+              mb: 1,
+              flexWrap: 'wrap',
+              gap: 1
+            }}>
               {lastRefresh && (
                 <Typography variant="caption" color="text.secondary">
                   Last updated: {lastRefresh.toLocaleTimeString()}
@@ -537,7 +620,12 @@ export default function Scanner() {
             </Box>
             
             {/* Connection Status Indicator */}
-            <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
+            <Box sx={{ 
+              display: 'flex', 
+              gap: 1, 
+              mb: 2,
+              flexWrap: 'wrap'
+            }}>
               <Chip 
                 icon={wsConnected ? <WifiIcon /> : <WifiOffIcon />}
                 label={wsConnected ? 'Live (15s backup)' : 'Auto-refresh (5s)'} 
@@ -571,10 +659,10 @@ export default function Scanner() {
                   p: 3
                 }}>
                   <QrCodeScannerIcon sx={{ fontSize: 48, mb: 2, opacity: 0.5 }} />
-                  <Typography variant="body2" align="center">
+                  <Typography variant="body2" align="center" sx={{ fontSize: { xs: '0.875rem', sm: '1rem' } }}>
                     No scans detected yet
                   </Typography>
-                  <Typography variant="caption" align="center" sx={{ mt: 1 }}>
+                  <Typography variant="caption" align="center" sx={{ mt: 1, fontSize: { xs: '0.75rem', sm: '0.875rem' } }}>
                     Point a QR code at the camera
                   </Typography>
                 </Box>
@@ -584,7 +672,8 @@ export default function Scanner() {
                     <React.Fragment key={`${scan.qr_data}-${scan.timestamp}-${index}`}>
                       <ListItem 
                         sx={{ 
-                          py: 2,
+                          py: { xs: 1.5, sm: 2 },
+                          px: { xs: 1, sm: 2 },
                           bgcolor: index === 0 ? 'action.hover' : 'transparent',
                           borderLeft: index === 0 ? '4px solid' : 'none',
                           borderLeftColor: index === 0 ? 'primary.main' : 'transparent'
@@ -592,8 +681,23 @@ export default function Scanner() {
                       >
                         <Box sx={{ width: '100%' }}>
                           {/* QR Data and Status */}
-                          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-                            <Typography variant="subtitle2" sx={{ fontWeight: 'bold' }}>
+                          <Box sx={{ 
+                            display: 'flex', 
+                            justifyContent: 'space-between', 
+                            alignItems: 'flex-start',
+                            mb: 1,
+                            flexWrap: 'wrap',
+                            gap: 1
+                          }}>
+                            <Typography 
+                              variant="subtitle2" 
+                              sx={{ 
+                                fontWeight: 'bold',
+                                fontSize: { xs: '0.875rem', sm: '1rem' },
+                                wordBreak: 'break-word',
+                                maxWidth: { xs: '60%', sm: '70%' }
+                              }}
+                            >
                               {scan.validation?.valid && scan.validation?.order_number 
                                 ? scan.validation.order_number 
                                 : scan.qr_data}
@@ -609,17 +713,17 @@ export default function Scanner() {
                           {scan.validation?.valid && (
                             <Box sx={{ mb: 1 }}>
                               {scan.validation.customer_name && (
-                                <Typography variant="body2" color="text.secondary">
+                                <Typography variant="body2" color="text.secondary" sx={{ fontSize: { xs: '0.75rem', sm: '0.875rem' } }}>
                                   Customer: {scan.validation.customer_name}
                                 </Typography>
                               )}
                               {scan.validation.product_name && (
-                                <Typography variant="body2" color="text.secondary">
+                                <Typography variant="body2" color="text.secondary" sx={{ fontSize: { xs: '0.75rem', sm: '0.875rem' } }}>
                                   Product: {scan.validation.product_name}
                                 </Typography>
                               )}
                               {scan.validation.amount && (
-                                <Typography variant="body2" color="text.secondary">
+                                <Typography variant="body2" color="text.secondary" sx={{ fontSize: { xs: '0.75rem', sm: '0.875rem' } }}>
                                   Amount: ₱{parseFloat(scan.validation.amount).toFixed(2)}
                                 </Typography>
                               )}
@@ -627,7 +731,7 @@ export default function Scanner() {
                           )}
                           
                           {/* Timestamp */}
-                          <Typography variant="caption" color="text.secondary">
+                          <Typography variant="caption" color="text.secondary" sx={{ fontSize: { xs: '0.6rem', sm: '0.75rem' } }}>
                             {new Date(scan.timestamp).toLocaleString()}
                           </Typography>
                           
@@ -638,8 +742,8 @@ export default function Scanner() {
                                 src={`data:image/jpeg;base64,${scan.image_data.base64}`}
                                 alt="QR Code"
                                 style={{ 
-                                  maxWidth: '80px', 
-                                  maxHeight: '80px',
+                                  maxWidth: '60px', 
+                                  maxHeight: '60px',
                                   border: '1px solid #ddd',
                                   borderRadius: '4px'
                                 }}
@@ -656,12 +760,19 @@ export default function Scanner() {
             </Box>
 
             {/* Quick Actions */}
-            <Box sx={{ mt: 2, display: 'flex', justifyContent: 'center' }}>
+            <Box sx={{ 
+              mt: 2, 
+              display: 'flex', 
+              justifyContent: 'center',
+              gap: 1,
+              flexWrap: 'wrap'
+            }}>
               <Button
                 variant="outlined"
                 size="small"
                 onClick={() => setHistoryModalOpen(true)}
                 disabled={qrHistory.length === 0}
+                sx={{ minWidth: { xs: '120px', sm: 'auto' } }}
               >
                 View All History
               </Button>
@@ -670,23 +781,168 @@ export default function Scanner() {
         </Grid>
       </Grid>
 
+      {/* Fullscreen Camera Modal */}
+      <Dialog
+        open={fullscreenOpen}
+        onClose={() => setFullscreenOpen(false)}
+        maxWidth={false}
+        fullScreen
+        PaperProps={{
+          style: {
+            backgroundColor: 'black',
+            margin: 0,
+            padding: 0,
+            borderRadius: 0,
+            maxHeight: '100vh',
+            maxWidth: '100vw',
+            height: '100vh',
+            width: '100vw',
+          },
+        }}
+        sx={{
+          '& .MuiDialog-container': {
+            height: '100vh',
+            width: '100vw',
+          },
+          '& .MuiBackdrop-root': {
+            backgroundColor: 'black',
+          },
+        }}
+      >
+        <Box
+          sx={{
+            width: '100vw',
+            height: '100vh',
+            display: 'flex',
+            flexDirection: 'column',
+            bgcolor: 'black',
+            position: 'relative',
+            margin: 0,
+            padding: 0,
+            overflow: 'hidden',
+          }}
+        >
+          {/* Status Bar */}
+          <Box
+            sx={{
+              position: 'absolute',
+              top: 16,
+              left: 16,
+              zIndex: 10,
+              display: 'flex',
+              gap: 1,
+              flexWrap: 'wrap',
+            }}
+          >
+            <Chip
+              icon={wsConnected ? <WifiIcon /> : <WifiOffIcon />}
+              label={wsConnected ? 'WebSocket' : 'HTTP'}
+              color={wsConnected ? 'success' : 'warning'}
+              size="small"
+            />
+            <Chip
+              label={isStreaming ? 'Camera Active' : 'Camera Inactive'}
+              color={isStreaming ? 'success' : 'error'}
+              size="small"
+            />
+          </Box>
+
+          {/* Camera Feed */}
+          <Box
+            sx={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100vw',
+              height: '100vh',
+              display: 'flex',
+              justifyContent: 'center',
+              alignItems: 'center',
+              bgcolor: 'black',
+            }}
+          >
+            {/* Exit Fullscreen Button - Always visible */}
+            <Tooltip title="Exit Fullscreen">
+              <IconButton
+                onClick={() => setFullscreenOpen(false)}
+                sx={{
+                  position: 'absolute',
+                  top: 16,
+                  right: 16,
+                  color: 'white',
+                  bgcolor: 'rgba(0, 0, 0, 0.6)',
+                  zIndex: 10,
+                  '&:hover': {
+                    bgcolor: 'rgba(0, 0, 0, 0.8)',
+                  },
+                  transition: 'all 0.2s ease-in-out',
+                }}
+              >
+                <FullscreenExitIcon />
+              </IconButton>
+            </Tooltip>
+
+            {isStreaming ? (
+              <img
+                src={`${RASPI_SERVER}/video_feed`}
+                alt="Camera Feed - Fullscreen"
+                style={{
+                  width: '100vw',
+                  height: '100vh',
+                  objectFit: 'contain',
+                }}
+              />
+            ) : (
+              <Box
+                sx={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  color: 'grey.500',
+                }}
+              >
+                <QrCodeScannerIcon sx={{ fontSize: 120, mb: 2 }} />
+                <Typography variant="h5" sx={{ color: 'grey.400' }}>
+                  Camera is stopped
+                </Typography>
+              </Box>
+            )}
+          </Box>
+        </Box>
+      </Dialog>
+
       {/* History Modal */}
-      <Dialog open={historyModalOpen} onClose={() => setHistoryModalOpen(false)} maxWidth="md" fullWidth>
-        <DialogTitle>
+      <Dialog 
+        open={historyModalOpen} 
+        onClose={() => setHistoryModalOpen(false)} 
+        maxWidth="md" 
+        fullWidth
+        fullScreen={{ xs: true, sm: false }}
+        sx={{
+          '& .MuiDialog-paper': {
+            margin: { xs: 0, sm: 2 },
+            width: { xs: '100%', sm: 'auto' },
+            maxHeight: { xs: '100vh', sm: '90vh' }
+          }
+        }}
+      >
+        <DialogTitle sx={{ pb: 1 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <HistoryIcon />
-            QR Code Scan History ({qrHistory.length})
+            <Typography variant="h6" sx={{ fontSize: { xs: '1.1rem', sm: '1.25rem' } }}>
+              QR Code Scan History ({qrHistory.length})
+            </Typography>
           </Box>
         </DialogTitle>
         <DialogContent sx={{ p: 0 }}>
-          <List sx={{ maxHeight: 400, overflow: 'auto' }}>
+          <List sx={{ maxHeight: { xs: 'none', sm: 400 }, overflow: 'auto' }}>
             {qrHistory.map((scan, index) => (
               <div key={index}>
-                <ListItem sx={{ py: 2 }}>
+                <ListItem sx={{ py: { xs: 1.5, sm: 2 }, px: { xs: 2, sm: 3 } }}>
                   <ListItemText
                     primary={
                       <Box>
-                        <Typography variant="h6" gutterBottom>
+                        <Typography variant="h6" gutterBottom sx={{ fontSize: { xs: '1rem', sm: '1.25rem' } }}>
                           Order ID: {scan.validation?.valid && scan.validation?.order_number 
                             ? scan.validation.order_number 
                             : scan.validation?.valid && scan.qr_data
@@ -706,8 +962,8 @@ export default function Scanner() {
                                 src={`data:image/jpeg;base64,${scan.image_data.base64}`}
                                 alt="QR Code"
                                 style={{ 
-                                  maxWidth: '200px', 
-                                  maxHeight: '200px',
+                                  maxWidth: window.innerWidth < 600 ? '150px' : '200px',
+                                  maxHeight: window.innerWidth < 600 ? '150px' : '200px',
                                   border: '1px solid #ddd',
                                   borderRadius: '4px'
                                 }}
@@ -724,7 +980,8 @@ export default function Scanner() {
                             variant="body1" 
                             sx={{ 
                               fontFamily: 'monospace',
-                              wordBreak: 'break-all'
+                              wordBreak: 'break-all',
+                              fontSize: { xs: '0.75rem', sm: '0.875rem' }
                             }}
                           >
                             {scan.qr_data}
@@ -734,7 +991,13 @@ export default function Scanner() {
                     }
                     secondary={
                       <Box sx={{ mt: 1 }}>
-                        <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 1 }}>
+                        <Box sx={{ 
+                          display: 'flex', 
+                          gap: 1, 
+                          alignItems: 'center', 
+                          mb: 1,
+                          flexWrap: 'wrap'
+                        }}>
                           <Chip
                             label={scan.validation?.valid ? 'Valid' : 'Not Valid'}
                             color={scan.validation?.valid ? 'success' : 'error'}
@@ -747,21 +1010,21 @@ export default function Scanner() {
                             color="info"
                           />
                         </Box>
-                        <Typography variant="caption" color="text.secondary">
+                        <Typography variant="caption" color="text.secondary" sx={{ fontSize: { xs: '0.7rem', sm: '0.75rem' } }}>
                           Scanned: {new Date(scan.timestamp).toLocaleString()}
                         </Typography>
                         {scan.validation?.valid && scan.validation?.customer_name && (
-                          <Typography variant="caption" color="success.main" sx={{ display: 'block' }}>
+                          <Typography variant="caption" color="success.main" sx={{ display: 'block', fontSize: { xs: '0.7rem', sm: '0.75rem' } }}>
                             Customer: {scan.validation.customer_name}
                           </Typography>
                         )}
                         {scan.validation?.valid && scan.validation?.product_name && (
-                          <Typography variant="caption" color="success.main" sx={{ display: 'block' }}>
+                          <Typography variant="caption" color="success.main" sx={{ display: 'block', fontSize: { xs: '0.7rem', sm: '0.75rem' } }}>
                             Product: {scan.validation.product_name}
                           </Typography>
                         )}
                         {!scan.validation?.valid && scan.validation?.message && (
-                          <Typography variant="caption" color="error.main" sx={{ display: 'block' }}>
+                          <Typography variant="caption" color="error.main" sx={{ display: 'block', fontSize: { xs: '0.7rem', sm: '0.75rem' } }}>
                             {scan.validation.message}
                           </Typography>
                         )}
@@ -773,14 +1036,23 @@ export default function Scanner() {
               </div>
             ))}
             {qrHistory.length === 0 && (
-              <ListItem>
-                <ListItemText primary="No scan history available" />
+              <ListItem sx={{ py: 4 }}>
+                <ListItemText 
+                  primary={
+                    <Box sx={{ textAlign: 'center' }}>
+                      <QrCodeScannerIcon sx={{ fontSize: 48, mb: 2, opacity: 0.5 }} />
+                      <Typography variant="body1">No scan history available</Typography>
+                    </Box>
+                  }
+                />
               </ListItem>
             )}
           </List>
         </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setHistoryModalOpen(false)}>Close</Button>
+        <DialogActions sx={{ p: { xs: 2, sm: 3 } }}>
+          <Button onClick={() => setHistoryModalOpen(false)} variant="outlined" fullWidth={{ xs: true, sm: false }}>
+            Close
+          </Button>
         </DialogActions>
       </Dialog>
     </Box>

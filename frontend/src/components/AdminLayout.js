@@ -1,23 +1,13 @@
 import React, { useState } from 'react';
 import {
-  AppBar,
   Box,
   Drawer,
   IconButton,
-  Toolbar,
-  Avatar,
-  Badge,
-  Menu,
-  MenuItem,
-  Tooltip,
   useMediaQuery,
   useTheme,
-  Typography,
 } from '@mui/material';
 import {
   Menu as MenuIcon,
-  Notifications as NotificationsIcon,
-  Person as PersonIcon,
 } from '@mui/icons-material';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import AdminSidebar from './AdminSidebar';
@@ -34,8 +24,6 @@ const drawerWidth = 280;
 
 export default function AdminLayout() {
   const [open, setOpen] = useState(true);
-  const [anchorEl, setAnchorEl] = useState(null);
-  const [notificationAnchor, setNotificationAnchor] = useState(null);
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
 
@@ -43,72 +31,8 @@ export default function AdminLayout() {
     setOpen(!open);
   };
 
-  const handleProfileClick = (event) => {
-    setAnchorEl(event.currentTarget);
-  };
-
-  const handleProfileClose = () => {
-    setAnchorEl(null);
-  };
-
-  const handleNotificationClick = (event) => {
-    setNotificationAnchor(event.currentTarget);
-  };
-
-  const handleNotificationClose = () => {
-    setNotificationAnchor(null);
-  };
-
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh' }}>
-      <AppBar
-        position="fixed"
-        sx={{
-          width: { md: `calc(100% - ${open ? drawerWidth : 0}px)` },
-          ml: { md: `${open ? drawerWidth : 0}px` },
-          transition: theme.transitions.create(['width', 'margin'], {
-            easing: theme.transitions.easing.sharp,
-            duration: theme.transitions.duration.leavingScreen,
-          }),
-        }}
-      >
-        <Toolbar>
-          <IconButton
-            color="inherit"
-            edge="start"
-            onClick={handleDrawerToggle}
-            sx={{ mr: 2, color: 'text.primary' }}
-          >
-            <MenuIcon />
-          </IconButton>
-          <Box sx={{ flexGrow: 1 }} />
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            <Tooltip title="Notifications">
-              <IconButton
-                size="large"
-                onClick={handleNotificationClick}
-                sx={{ color: 'text.primary' }}
-              >
-                <Badge badgeContent={4} color="error">
-                  <NotificationsIcon />
-                </Badge>
-              </IconButton>
-            </Tooltip>
-            <Tooltip title="Profile">
-              <IconButton
-                size="large"
-                onClick={handleProfileClick}
-                sx={{ color: 'text.primary' }}
-              >
-                <Avatar sx={{ width: 32, height: 32 }}>
-                  <PersonIcon />
-                </Avatar>
-              </IconButton>
-            </Tooltip>
-          </Box>
-        </Toolbar>
-      </AppBar>
-
       <Drawer
         variant={isMobile ? 'temporary' : 'permanent'}
         open={open}
@@ -133,9 +57,26 @@ export default function AdminLayout() {
           width: { md: `calc(100% - ${drawerWidth}px)` },
           minHeight: '100vh',
           backgroundColor: 'background.default',
-          marginTop: '64px',
         }}
       >
+        {/* Mobile menu toggle button */}
+        <Box sx={{ display: { md: 'none' }, mb: 2 }}>
+          <IconButton
+            color="primary"
+            onClick={handleDrawerToggle}
+            sx={{ 
+              backgroundColor: 'background.paper',
+              boxShadow: 1,
+              '&:hover': {
+                backgroundColor: 'background.paper',
+                boxShadow: 2,
+              }
+            }}
+          >
+            <MenuIcon />
+          </IconButton>
+        </Box>
+        
         <Routes>
           <Route path="/" element={<Navigate to="/admin" replace />} />
           <Route path="" element={<Dashboard />} />
@@ -148,34 +89,6 @@ export default function AdminLayout() {
           <Route path="settings" element={<Settings />} />
         </Routes>
       </Box>
-
-      <Menu
-        anchorEl={anchorEl}
-        open={Boolean(anchorEl)}
-        onClose={handleProfileClose}
-        sx={{ mt: 1 }}
-      >
-        <MenuItem onClick={handleProfileClose}>Profile</MenuItem>
-        <MenuItem onClick={handleProfileClose}>My account</MenuItem>
-        <MenuItem onClick={handleProfileClose}>Logout</MenuItem>
-      </Menu>
-
-      <Menu
-        anchorEl={notificationAnchor}
-        open={Boolean(notificationAnchor)}
-        onClose={handleNotificationClose}
-        sx={{ mt: 1 }}
-      >
-        <MenuItem onClick={handleNotificationClose}>
-          <Typography variant="subtitle2">New parcel arrived</Typography>
-        </MenuItem>
-        <MenuItem onClick={handleNotificationClose}>
-          <Typography variant="subtitle2">Shipping route updated</Typography>
-        </MenuItem>
-        <MenuItem onClick={handleNotificationClose}>
-          <Typography variant="subtitle2">System maintenance scheduled</Typography>
-        </MenuItem>
-      </Menu>
     </Box>
   );
 } 
