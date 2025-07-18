@@ -18,6 +18,12 @@ import {
   Divider,
   IconButton,
   Tooltip,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
 } from '@mui/material';
 import QrCodeScannerIcon from '@mui/icons-material/QrCodeScanner';
 import HistoryIcon from '@mui/icons-material/History';
@@ -28,8 +34,8 @@ import FullscreenIcon from '@mui/icons-material/Fullscreen';
 import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
 import websocketService from '../services/websocketService';
 
-const RASPI_SERVER = process.env.REACT_APP_RASPBERRY_PI_URL || 'http://192.168.100.63:5001'; // Your Raspberry Pi address
-const BACKEND_SERVER = process.env.REACT_APP_BACKEND_URL || 'http://192.168.100.61:5000'; // Your Flask backend
+const RASPI_SERVER = process.env.REACT_APP_RASPI_BASE_URL || 'http://192.168.100.63:5001';
+const BACKEND_SERVER = process.env.REACT_APP_API_BASE_URL || 'http://192.168.100.61:5000';
 
 export default function Scanner() {
   const [isStreaming, setIsStreaming] = useState(true); // Auto-start camera
@@ -780,6 +786,30 @@ export default function Scanner() {
           </Paper>
         </Grid>
       </Grid>
+
+      {/* Package Information Table */}
+      <Paper sx={{ p: { xs: 2, sm: 3 }, mt: { xs: 2, sm: 3 } }}>
+        <Typography variant="h6" gutterBottom sx={{ fontSize: { xs: '1.1rem', sm: '1.25rem' } }}>
+          Package Information
+        </Typography>
+        <TableContainer>
+          <Table sx={{ minWidth: 650 }} aria-label="package information table">
+            <TableHead>
+              <TableRow>
+                <TableCell>Order Id</TableCell>
+                <TableCell>Package Size</TableCell>
+                <TableCell>Package Weight</TableCell>
+                <TableCell>Package Height</TableCell>
+                <TableCell>Package Width</TableCell>
+                <TableCell>Package Length</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {/* Empty table for now - will be populated later */}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      </Paper>
 
       {/* Fullscreen Camera Modal */}
       <Dialog

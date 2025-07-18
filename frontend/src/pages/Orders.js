@@ -128,7 +128,7 @@ const Orders = () => {
 
   const fetchOrders = async () => {
     try {
-      const response = await axios.get(`${process.env.REACT_APP_API_BASE_URL || 'http://192.168.100.61:5000/api'}/orders`);
+      const response = await axios.get(`${process.env.REACT_APP_API_ENDPOINT || 'http://192.168.100.61:5000/api'}/orders`);
       setOrders(response.data);
       setLoading(false);
     } catch (error) {
@@ -189,7 +189,7 @@ const Orders = () => {
         // Fallback to HTTP
         console.log('Using HTTP fallback for printing');
         
-        const response = await axios.post(`${process.env.REACT_APP_API_BASE_URL || 'http://192.168.100.61:5000/api'}/print-qr`, {
+        const response = await axios.post(`${process.env.REACT_APP_API_ENDPOINT || 'http://192.168.100.61:5000/api'}/print-qr`, {
           orderId: orderId.toString()
         }, {
           timeout: 15000 // Increased timeout for Raspberry Pi browser

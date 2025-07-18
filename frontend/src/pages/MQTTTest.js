@@ -33,7 +33,7 @@ import ConnectionMonitor from '../components/ConnectionMonitor';
 import ErrorBoundary from '../components/ErrorBoundary';
 import raspberryPiWebSocketService from '../services/raspberryPiWebSocketService';
 
-const RASPI_SERVER = process.env.REACT_APP_RASPBERRY_PI_URL || 'http://192.168.100.63:5001'; // Your Raspberry Pi server
+const RASPI_SERVER = process.env.REACT_APP_RASPI_BASE_URL || 'http://192.168.100.63:5001';
 
 const MQTTTest = () => {
   const [mqttStatus, setMqttStatus] = useState(null);
