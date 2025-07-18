@@ -37,6 +37,14 @@ import websocketService from '../services/websocketService';
 const RASPI_SERVER = process.env.REACT_APP_RASPI_BASE_URL || 'http://192.168.100.63:5001';
 const BACKEND_SERVER = process.env.REACT_APP_API_BASE_URL || 'http://192.168.100.61:5000';
 
+// Debug logging
+console.log('Environment Variables:', {
+  REACT_APP_RASPI_BASE_URL: process.env.REACT_APP_RASPI_BASE_URL,
+  REACT_APP_API_BASE_URL: process.env.REACT_APP_API_BASE_URL,
+  RASPI_SERVER,
+  BACKEND_SERVER
+});
+
 export default function Scanner() {
   const [isStreaming, setIsStreaming] = useState(true); // Auto-start camera
   const [qrHistory, setQrHistory] = useState([]);
