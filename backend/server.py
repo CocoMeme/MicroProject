@@ -82,6 +82,38 @@ class MQTTListener:
         topic = msg.topic
         logger.info(f"📨 MQTT [{timestamp}] {topic} > {message}")
         
+        # Process specific MQTT topics for sensor data
+        global mqtt_sensor_data
+        try:
+            # Handle loadcell weight data
+            if topic.lower() == '/loadcell':
+                try:
+                    weight = float(message)
+                    mqtt_sensor_data['loadcell']['weight'] = weight
+                    mqtt_sensor_data['loadcell']['timestamp'] = datetime.now().isoformat()
+                    logger.info(f"📏 LOADCELL: Weight updated to {weight}")
+                except ValueError:
+                    logger.warning(f"Invalid weight value received: {message}")
+            
+            # Handle box dimensions data
+            elif topic.lower() == '/box/results':
+                try:
+                    # Expecting format: "width,height,length"
+                    dimensions = message.split(',')
+                    if len(dimensions) == 3:
+                        width, height, length = [float(dim.strip()) for dim in dimensions]
+                        mqtt_sensor_data['box_dimensions']['width'] = width
+                        mqtt_sensor_data['box_dimensions']['height'] = height
+                        mqtt_sensor_data['box_dimensions']['length'] = length
+                        mqtt_sensor_data['box_dimensions']['timestamp'] = datetime.now().isoformat()
+                        logger.info(f"📦 BOX DIMENSIONS: W:{width}, H:{height}, L:{length}")
+                    else:
+                        logger.warning(f"Invalid box dimensions format: {message}")
+                except ValueError:
+                    logger.warning(f"Invalid box dimensions values: {message}")
+        except Exception as e:
+            logger.error(f"Error processing MQTT sensor data: {e}")
+        
         # Log to file
         try:
             with open("mqtt_messages.log", "a", encoding='utf-8') as f:
@@ -94,7 +126,8 @@ class MQTTListener:
             'topic': topic,
             'message': message,
             'timestamp': datetime.now().isoformat(),
-            'raw_timestamp': timestamp
+            'raw_timestamp': timestamp,
+            'sensor_data': mqtt_sensor_data.copy()  # Include current sensor data state
         }
         
         logger.info(f"Emitting MQTT message via WebSocket: {mqtt_data}")
@@ -152,6 +185,156 @@ class MQTTListener:
 
 # Initialize MQTT listener
 mqtt_listener = MQTTListener()
+
+# Temporary storage for MQTT sensor data
+mqtt_sensor_data = {
+    'loadcell': {
+        'weight': None,
+        'timestamp': None
+    },
+    'box_dimensions': {
+        'width': None,
+        'height': None, 
+        'length': None,
+        'timestamp': None
+    }
+}
+
+@app.route('/api/clear-sensor-data', methods=['POST'])
+def clear_sensor_data():
+    """Manually clear stored sensor data"""
+    try:
+        global mqtt_sensor_data
+        mqtt_sensor_data['loadcell']['weight'] = None
+        mqtt_sensor_data['loadcell']['timestamp'] = None
+        mqtt_sensor_data['box_dimensions']['width'] = None
+        mqtt_sensor_data['box_dimensions']['height'] = None
+        mqtt_sensor_data['box_dimensions']['length'] = None
+        mqtt_sensor_data['box_dimensions']['timestamp'] = None
+        
+        # Emit update via WebSocket
+        socketio.emit('sensor_data_cleared', {
+            'timestamp': datetime.now().isoformat()
+        })
+        
+        return jsonify({
+            'message': 'Sensor data cleared successfully',
+            'timestamp': datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error clearing sensor data: {str(e)}")
+        return jsonify({
+            'error': 'Failed to clear sensor data',
+            'details': str(e)
+        }), 500
+
+@app.route('/api/mqtt-sensor-data')
+def get_mqtt_sensor_data():
+    """Get current MQTT sensor data"""
+    try:
+        return jsonify({
+            'sensor_data': mqtt_sensor_data,
+            'timestamp': datetime.now().isoformat()
+        })
+    except Exception as e:
+        logger.error(f"Error getting MQTT sensor data: {str(e)}")
+        return jsonify({
+            'error': 'Failed to get MQTT sensor data',
+            'details': str(e)
+        }), 500
+
+@app.route('/api/apply-package-data', methods=['POST'])
+def apply_package_data():
+    """Apply MQTT sensor data to a scanned QR order"""
+    try:
+        data = request.get_json()
+        order_number = data.get('order_number')
+        
+        if not order_number:
+            return jsonify({'error': 'No order number provided'}), 400
+        
+        # Validate order exists by calling main backend
+        backend_url = 'http://192.168.100.61:5000/api/validate-qr'
+        validation_response = requests.post(backend_url, json={'qr_data': order_number}, timeout=10)
+        
+        if validation_response.status_code != 200:
+            return jsonify({
+                'error': 'Failed to validate order',
+                'details': 'Could not connect to main backend'
+            }), 500
+        
+        validation_data = validation_response.json()
+        if not validation_data.get('valid'):
+            return jsonify({
+                'error': 'Invalid order number',
+                'message': validation_data.get('message', 'Order not found')
+            }), 400
+        
+        # Check if we have sensor data
+        weight = mqtt_sensor_data['loadcell']['weight']
+        dimensions = mqtt_sensor_data['box_dimensions']
+        
+        if weight is None and all(d is None for d in [dimensions['width'], dimensions['height'], dimensions['length']]):
+            return jsonify({
+                'error': 'No sensor data available',
+                'message': 'Please ensure loadcell and box dimension sensors have provided data'
+            }), 400
+        
+        # Apply package data to main backend
+        package_data = {
+            'order_number': order_number,
+            'order_id': validation_data['order_id'],
+            'weight': weight,
+            'width': dimensions['width'],
+            'height': dimensions['height'],
+            'length': dimensions['length'],
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        # Send package data to main backend
+        backend_package_url = 'http://192.168.100.61:5000/api/package-information'
+        package_response = requests.post(backend_package_url, json=package_data, timeout=10)
+        
+        if package_response.status_code == 200 or package_response.status_code == 201:
+            # Clear sensor data after successful application
+            mqtt_sensor_data['loadcell']['weight'] = None
+            mqtt_sensor_data['loadcell']['timestamp'] = None
+            mqtt_sensor_data['box_dimensions']['width'] = None
+            mqtt_sensor_data['box_dimensions']['height'] = None
+            mqtt_sensor_data['box_dimensions']['length'] = None
+            mqtt_sensor_data['box_dimensions']['timestamp'] = None
+            
+            # Emit update via WebSocket
+            socketio.emit('package_data_applied', {
+                'order_number': order_number,
+                'package_data': package_data,
+                'timestamp': datetime.now().isoformat()
+            })
+            
+            return jsonify({
+                'message': 'Package data applied successfully',
+                'order_number': order_number,
+                'package_data': package_data
+            })
+        else:
+            return jsonify({
+                'error': 'Failed to apply package data',
+                'details': 'Backend service error'
+            }), 500
+            
+    except requests.RequestException as e:
+        logger.error(f"Error connecting to main backend: {e}")
+        return jsonify({
+            'error': 'Connection to main backend failed',
+            'details': str(e)
+        }), 500
+    except Exception as e:
+        logger.error(f"Error applying package data: {e}")
+        return jsonify({
+            'error': 'Failed to apply package data',
+            'details': str(e)
+        }), 500
 
 @app.route('/status')
 def status():
@@ -412,6 +595,101 @@ def get_qr_history():
             'details': str(e)
         }), 500
 
+@app.route('/camera/duplicate-prevention/status')
+def get_duplicate_prevention_status():
+    """Get duplicate prevention status and scanned QR codes"""
+    try:
+        status = camera.get_duplicate_prevention_status()
+        return jsonify(status)
+    except Exception as e:
+        logger.error(f"Error getting duplicate prevention status: {str(e)}")
+        return jsonify({
+            'error': 'Failed to get duplicate prevention status',
+            'details': str(e)
+        }), 500
+
+@app.route('/camera/duplicate-prevention/toggle', methods=['POST'])
+def toggle_duplicate_prevention():
+    """Enable or disable duplicate prevention"""
+    try:
+        data = request.get_json()
+        enabled = data.get('enabled', True)
+        camera.set_duplicate_prevention(enabled)
+        return jsonify({
+            'success': True,
+            'duplicate_prevention_enabled': enabled,
+            'message': f'Duplicate prevention {"enabled" if enabled else "disabled"}'
+        })
+    except Exception as e:
+        logger.error(f"Error toggling duplicate prevention: {str(e)}")
+        return jsonify({
+            'error': 'Failed to toggle duplicate prevention',
+            'details': str(e)
+        }), 500
+
+@app.route('/camera/duplicate-prevention/clear-all', methods=['POST'])
+def clear_all_scanned_qr():
+    """Clear all scanned QR codes to allow rescanning"""
+    try:
+        count = camera.clear_all_scanned_qr_codes()
+        return jsonify({
+            'success': True,
+            'cleared_count': count,
+            'message': f'Cleared {count} scanned QR codes'
+        })
+    except Exception as e:
+        logger.error(f"Error clearing scanned QR codes: {str(e)}")
+        return jsonify({
+            'error': 'Failed to clear scanned QR codes',
+            'details': str(e)
+        }), 500
+
+@app.route('/camera/duplicate-prevention/clear-qr', methods=['POST'])
+def clear_specific_qr():
+    """Clear a specific QR code to allow rescanning"""
+    try:
+        data = request.get_json()
+        qr_data = data.get('qr_data')
+        
+        if not qr_data:
+            return jsonify({'error': 'No QR data provided'}), 400
+            
+        success = camera.clear_scanned_qr(qr_data)
+        
+        if success:
+            return jsonify({
+                'success': True,
+                'message': f'QR code "{qr_data}" cleared for rescanning'
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'message': f'QR code "{qr_data}" was not in scanned list'
+            })
+            
+    except Exception as e:
+        logger.error(f"Error clearing specific QR code: {str(e)}")
+        return jsonify({
+            'error': 'Failed to clear QR code',
+            'details': str(e)
+        }), 500
+
+@app.route('/camera/duplicate-prevention/scanned-codes')
+def get_scanned_qr_codes():
+    """Get list of all scanned QR codes"""
+    try:
+        scanned_codes = camera.get_scanned_qr_codes()
+        return jsonify({
+            'scanned_codes': scanned_codes,
+            'count': len(scanned_codes)
+        })
+    except Exception as e:
+        logger.error(f"Error getting scanned QR codes: {str(e)}")
+        return jsonify({
+            'error': 'Failed to get scanned QR codes',
+            'details': str(e)
+        }), 500
+
 @app.route('/api/validate-qr', methods=['POST'])
 def validate_qr():
     """Validate QR code by forwarding to main backend"""
@@ -455,12 +733,58 @@ def on_qr_detected(qr_data, validation_result):
         history = camera.get_qr_history()
         latest_scan = history[0] if history else None
         
+        # If QR is valid and we have sensor data, automatically apply package data
+        if validation_result.get('valid') and validation_result.get('order_id'):
+            weight = mqtt_sensor_data['loadcell']['weight']
+            dimensions = mqtt_sensor_data['box_dimensions']
+            
+            # Check if we have any sensor data to apply
+            if weight is not None or any(d is not None for d in [dimensions['width'], dimensions['height'], dimensions['length']]):
+                try:
+                    # Apply package data automatically
+                    package_data = {
+                        'order_number': qr_data,
+                        'order_id': validation_result['order_id'],
+                        'weight': weight,
+                        'width': dimensions['width'],
+                        'height': dimensions['height'],
+                        'length': dimensions['length'],
+                        'timestamp': datetime.now().isoformat()
+                    }
+                    
+                    # Send package data to main backend
+                    backend_package_url = 'http://192.168.100.61:5000/api/package-information'
+                    package_response = requests.post(backend_package_url, json=package_data, timeout=10)
+                    
+                    if package_response.status_code in [200, 201]:
+                        # Clear sensor data after successful application
+                        mqtt_sensor_data['loadcell']['weight'] = None
+                        mqtt_sensor_data['loadcell']['timestamp'] = None
+                        mqtt_sensor_data['box_dimensions']['width'] = None
+                        mqtt_sensor_data['box_dimensions']['height'] = None
+                        mqtt_sensor_data['box_dimensions']['length'] = None
+                        mqtt_sensor_data['box_dimensions']['timestamp'] = None
+                        
+                        logger.info(f"✅ Automatically applied package data for order {qr_data}: W:{weight}, D:{dimensions['width']}x{dimensions['height']}x{dimensions['length']}")
+                        
+                        # Add package data to validation result for emission
+                        validation_result['package_data_applied'] = True
+                        validation_result['package_data'] = package_data
+                    else:
+                        logger.warning(f"⚠️ Failed to apply package data for order {qr_data}: {package_response.status_code}")
+                        
+                except Exception as e:
+                    logger.error(f"❌ Error auto-applying package data for {qr_data}: {e}")
+            else:
+                logger.info(f"ℹ️ No sensor data available to apply for order {qr_data}")
+        
         socketio.emit('qr_detected', {
             'data': qr_data,
             'timestamp': datetime.now().isoformat(),
             'type': 'QR Code',
             'validation': validation_result,
-            'latest_scan': latest_scan
+            'latest_scan': latest_scan,
+            'sensor_data': mqtt_sensor_data.copy()  # Include current sensor data
         })
         
         # Emit updated history for real-time updates
@@ -693,6 +1017,41 @@ def handle_check_printer_status():
             'error': str(e),
             'timestamp': datetime.now().isoformat()
         })
+
+@app.route('/debug/test-mqtt', methods=['POST'])
+def test_mqtt():
+    """Debug endpoint to simulate MQTT sensor data messages"""
+    try:
+        data = request.get_json()
+        topic = data.get('topic')
+        message = data.get('message')
+        
+        if not topic or not message:
+            return jsonify({'error': 'Both topic and message are required'}), 400
+        
+        # Simulate the MQTT message processing by calling the on_message method directly
+        class MockMsg:
+            def __init__(self, topic, payload):
+                self.topic = topic
+                self.payload = payload.encode('utf-8')
+        
+        # Create a mock message and process it
+        mock_msg = MockMsg(topic, message)
+        mqtt_listener.on_message(None, None, mock_msg)
+        
+        return jsonify({
+            'message': f'Test MQTT message processed for topic {topic}',
+            'topic': topic,
+            'data': message,
+            'timestamp': datetime.now().isoformat()
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error processing test MQTT message: {e}")
+        return jsonify({
+            'error': 'Failed to process test MQTT message',
+            'details': str(e)
+        }), 500
 
 @app.route('/debug/test-mqtt-message', methods=['POST'])
 def test_mqtt_message():

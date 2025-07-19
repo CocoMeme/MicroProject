@@ -9,6 +9,7 @@ import os
 import sqlite3
 from dotenv import load_dotenv
 import threading
+from products_data import products_data
 
 load_dotenv()
 
@@ -92,6 +93,22 @@ def init_db():
             order_id INTEGER,
             validation_message TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # Create package information table to store physical package data
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS package_information (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id INTEGER,
+            order_number TEXT,
+            weight REAL,
+            width REAL,
+            height REAL,
+            length REAL,
+            timestamp TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (order_id) REFERENCES orders (id)
         )
     ''')
     
@@ -761,6 +778,137 @@ def qr_polling_task():
             print(f"Error in QR polling: {e}")
             break
 
+@app.route('/api/package-information', methods=['POST'])
+def create_package_information():
+    """Store package information (weight and dimensions) for an order"""
+    try:
+        data = request.get_json()
+        
+        required_fields = ['order_number', 'order_id', 'timestamp']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({'error': f'Missing required field: {field}'}), 400
+        
+        # Validate that at least one measurement is provided
+        measurements = ['weight', 'width', 'height', 'length']
+        if not any(data.get(field) is not None for field in measurements):
+            return jsonify({'error': 'At least one measurement (weight, width, height, or length) must be provided'}), 400
+        
+        conn = sqlite3.connect('database.db')
+        c = conn.cursor()
+        
+        # Check if package information already exists for this order
+        c.execute('SELECT id FROM package_information WHERE order_id = ?', (data['order_id'],))
+        existing = c.fetchone()
+        
+        if existing:
+            # Update existing record
+            c.execute('''
+                UPDATE package_information 
+                SET weight = ?, width = ?, height = ?, length = ?, timestamp = ?
+                WHERE order_id = ?
+            ''', (
+                data.get('weight'),
+                data.get('width'), 
+                data.get('height'),
+                data.get('length'),
+                data['timestamp'],
+                data['order_id']
+            ))
+            message = 'Package information updated successfully'
+        else:
+            # Insert new record
+            c.execute('''
+                INSERT INTO package_information (
+                    order_id, order_number, weight, width, height, length, timestamp
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                data['order_id'],
+                data['order_number'],
+                data.get('weight'),
+                data.get('width'),
+                data.get('height'), 
+                data.get('length'),
+                data['timestamp']
+            ))
+            message = 'Package information created successfully'
+        
+        conn.commit()
+        conn.close()
+        
+        # Emit update via WebSocket to notify clients
+        socketio.emit('package_information_updated', {
+            'order_id': data['order_id'],
+            'order_number': data['order_number'],
+            'weight': data.get('weight'),
+            'width': data.get('width'),
+            'height': data.get('height'),
+            'length': data.get('length'),
+            'timestamp': data['timestamp']
+        })
+        
+        return jsonify({
+            'message': message,
+            'order_id': data['order_id'],
+            'order_number': data['order_number']
+        }), 201
+        
+    except Exception as e:
+        return jsonify({
+            'error': 'Failed to store package information',
+            'details': str(e)
+        }), 500
+
+@app.route('/api/package-information/<int:order_id>', methods=['GET'])
+def get_package_information(order_id):
+    """Get package information for a specific order"""
+    try:
+        conn = sqlite3.connect('database.db')
+        conn.row_factory = dict_factory
+        c = conn.cursor()
+        
+        c.execute('SELECT * FROM package_information WHERE order_id = ?', (order_id,))
+        package_info = c.fetchone()
+        
+        conn.close()
+        
+        if package_info:
+            return jsonify(package_info)
+        else:
+            return jsonify({'message': 'No package information found for this order'}), 404
+            
+    except Exception as e:
+        return jsonify({
+            'error': 'Failed to get package information',
+            'details': str(e)
+        }), 500
+
+@app.route('/api/package-information', methods=['GET'])
+def get_all_package_information():
+    """Get all package information records"""
+    try:
+        conn = sqlite3.connect('database.db')
+        conn.row_factory = dict_factory
+        c = conn.cursor()
+        
+        c.execute('''
+            SELECT pi.*, o.customer_name, o.product_name 
+            FROM package_information pi
+            LEFT JOIN orders o ON pi.order_id = o.id
+            ORDER BY pi.created_at DESC
+        ''')
+        package_info = c.fetchall()
+        
+        conn.close()
+        
+        return jsonify(package_info)
+        
+    except Exception as e:
+        return jsonify({
+            'error': 'Failed to get package information',
+            'details': str(e)
+        }), 500
+
 @app.route('/api/validate-qr', methods=['POST'])
 def validate_qr_code():
     """Validate QR code against orders database"""
@@ -779,23 +927,29 @@ def validate_qr_code():
         c.execute('SELECT * FROM orders WHERE order_number = ?', (qr_data,))
         order = c.fetchone()
         
-        conn.close()
-        
         if order:
-            return jsonify({
+            # Also get package information if it exists
+            c.execute('SELECT * FROM package_information WHERE order_id = ?', (order['id'],))
+            package_info = c.fetchone()
+            
+            response_data = {
                 'valid': True,
                 'order_id': order['id'],
                 'order_number': order['order_number'],
                 'customer_name': order['customer_name'],
                 'product_name': order['product_name'],
                 'amount': order['amount'],
-                'date': order['date']
-            }), 200
+                'date': order['date'],
+                'package_information': package_info
+            }
         else:
-            return jsonify({
+            response_data = {
                 'valid': False, 
                 'message': 'QR code not found in orders database'
-            }), 200
+            }
+        
+        conn.close()
+        return jsonify(response_data), 200
             
     except Exception as e:
         return jsonify({

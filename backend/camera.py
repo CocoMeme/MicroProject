@@ -61,6 +61,8 @@ class CameraManager:
 			self.scanned_qr_history = []  # Store history of scanned QR codes
 			self.max_history = 50  # Keep last 50 scanned codes
 			self.qr_callbacks = []  # Callbacks to notify when new QR is detected
+			self.scanned_qr_codes = set()  # Track already scanned QR codes to prevent duplicates
+			self.duplicate_prevention_enabled = True  # Flag to enable/disable duplicate prevention
 			
 			# Create directory for QR code images
 			self.qr_images_dir = 'qr_images'
@@ -87,6 +89,47 @@ class CameraManager:
 					callback(qr_data, validation_result)
 				except Exception as e:
 					logger.error(f"QR callback error: {e}")
+
+		def is_qr_already_scanned(self, qr_data):
+			"""Check if QR code has already been scanned"""
+			return qr_data in self.scanned_qr_codes
+
+		def mark_qr_as_scanned(self, qr_data):
+			"""Mark QR code as scanned to prevent duplicate scanning"""
+			self.scanned_qr_codes.add(qr_data)
+			logger.info(f"QR code marked as scanned: {qr_data}")
+
+		def clear_scanned_qr(self, qr_data):
+			"""Remove QR code from scanned list to allow rescanning"""
+			if qr_data in self.scanned_qr_codes:
+				self.scanned_qr_codes.remove(qr_data)
+				logger.info(f"QR code cleared for rescanning: {qr_data}")
+				return True
+			return False
+
+		def clear_all_scanned_qr_codes(self):
+			"""Clear all scanned QR codes to allow rescanning of everything"""
+			count = len(self.scanned_qr_codes)
+			self.scanned_qr_codes.clear()
+			logger.info(f"Cleared {count} scanned QR codes")
+			return count
+
+		def get_scanned_qr_codes(self):
+			"""Get list of all scanned QR codes"""
+			return list(self.scanned_qr_codes)
+
+		def set_duplicate_prevention(self, enabled):
+			"""Enable or disable duplicate prevention"""
+			self.duplicate_prevention_enabled = enabled
+			logger.info(f"Duplicate prevention {'enabled' if enabled else 'disabled'}")
+
+		def get_duplicate_prevention_status(self):
+			"""Get current duplicate prevention status"""
+			return {
+				'enabled': self.duplicate_prevention_enabled,
+				'scanned_count': len(self.scanned_qr_codes),
+				'scanned_codes': list(self.scanned_qr_codes)
+			}
 
 		def save_qr_image(self, frame, qr_data, qr_bounds):
 			"""Save an image of the detected QR code"""
@@ -268,10 +311,25 @@ class CameraManager:
 					data = obj.data.decode('utf-8')
 					current_time = time.time()
 					
+					# Check for duplicate prevention first
+					if self.duplicate_prevention_enabled and self.is_qr_already_scanned(data):
+						# Draw a different colored box for already scanned QR codes
+						points = obj.polygon
+						if len(points) >= 4:
+							# Orange color for already scanned QR codes
+							pts = [(point.x, point.y) for point in points]
+							cv2.polylines(frame, [cv2.convexHull(np.array(pts, dtype=np.int32))], isClosed=True, color=(0, 165, 255), thickness=3)
+						
+						# Display "Already Scanned" message
+						x, y, w, h = obj.rect
+						cv2.putText(frame, f"{data} - Already Scanned", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+						continue  # Skip processing this QR code
+					
 					# Validate QR code once and reuse the result
 					validation_result = self.validate_qr_with_database(data)
 					
 					# Check if this is a new QR code or enough time has passed since last detection
+					# (keeping time-based cooldown for the same QR code being detected multiple times rapidly)
 					should_process = (
 						data != self.last_qr_data or 
 						self.last_qr_time is None or
@@ -281,6 +339,10 @@ class CameraManager:
 					if should_process:
 						self.last_qr_data = data
 						self.last_qr_time = current_time
+						
+						# Mark QR code as scanned if duplicate prevention is enabled
+						if self.duplicate_prevention_enabled:
+							self.mark_qr_as_scanned(data)
 						
 						# Save QR code image
 						x, y, w, h = obj.rect
@@ -332,7 +394,8 @@ class CameraManager:
 			return {
 				"camera_running": self.running,
 				"initialization_error": self.initialization_error,
-				"has_camera": self.picam2 is not None
+				"has_camera": self.picam2 is not None,
+				"duplicate_prevention": self.get_duplicate_prevention_status()
 			}
 
 		def get_last_qr(self):
