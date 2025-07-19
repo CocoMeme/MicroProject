@@ -8,7 +8,6 @@ import requests
 import os
 import sqlite3
 from dotenv import load_dotenv
-from products_data import products_data
 import threading
 
 load_dotenv()
