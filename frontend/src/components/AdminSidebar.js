@@ -13,6 +13,7 @@ import {
 import {
   Person as PersonIcon,
   ChevronLeft as ChevronLeftIcon,
+  Dashboard as DashboardIcon,
   ShoppingCart as OrdersIcon,
   QrCodeScanner as ScannerIcon,
   Router as MQTTIcon,
@@ -20,6 +21,7 @@ import {
 import { useLocation, useNavigate } from 'react-router-dom';
 
 const menuItems = [
+  { text: 'Dashboard', icon: <DashboardIcon />, path: '/admin/dashboard' },
   { text: 'Orders', icon: <OrdersIcon />, path: '/admin/orders' },
   { text: 'Scanner', icon: <ScannerIcon />, path: '/admin/scanner' },
   { text: 'MQTT Test', icon: <MQTTIcon />, path: '/admin/mqtt-test' },

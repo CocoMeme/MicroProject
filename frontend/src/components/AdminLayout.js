@@ -11,6 +11,7 @@ import {
 } from '@mui/icons-material';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import AdminSidebar from './AdminSidebar';
+import Dashboard from '../pages/Dashboard';
 import Orders from '../pages/Orders';
 import Scanner from '../pages/Scanner';
 import MQTTTest from '../pages/MQTTTest';
@@ -73,8 +74,9 @@ export default function AdminLayout() {
         </Box>
         
         <Routes>
-          <Route path="/" element={<Navigate to="/admin/orders" replace />} />
-          <Route path="" element={<Navigate to="/admin/orders" replace />} />
+          <Route path="/" element={<Navigate to="/admin/dashboard" replace />} />
+          <Route path="" element={<Navigate to="/admin/dashboard" replace />} />
+          <Route path="dashboard" element={<Dashboard />} />
           <Route path="orders" element={<Orders />} />
           <Route path="scanner" element={<Scanner />} />
           <Route path="mqtt-test" element={<MQTTTest />} />
