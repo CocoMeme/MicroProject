@@ -188,7 +188,7 @@ export default function Dashboard() {
             <Box sx={{ 
               display: 'flex', 
               flexDirection: 'column', 
-              gap: 1.5,
+              gap: 1,
               height: 'calc(100% - 60px)'
             }}>
               {controlButtons.map((button, index) => (
@@ -196,16 +196,18 @@ export default function Dashboard() {
                   key={index}
                   variant={button.variant}
                   color={button.color}
-                  size="medium"
+                  size="small"
                   startIcon={button.icon}
                   fullWidth
                   sx={{
                     flex: 1,
-                    py: 1.5,
-                    fontSize: '0.9rem',
+                    py: 1,
+                    fontSize: '0.8rem',
                     fontWeight: 500,
                     borderRadius: 2,
                     textTransform: 'none',
+                    minHeight: '40px',
+                    maxHeight: '50px',
                     '&:hover': {
                       transform: 'translateY(-1px)',
                       boxShadow: theme.shadows[3],
