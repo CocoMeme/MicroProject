@@ -20,7 +20,6 @@ import {
 import {
   Notifications,
   Search,
-  Settings,
   Person,
   ExitToApp,
   LocalShipping,
@@ -130,17 +129,6 @@ export default function Header() {
           </IconButton>
         </Tooltip>
 
-        {/* Settings */}
-        <Tooltip title="Settings">
-          <IconButton
-            size="large"
-            color="inherit"
-            sx={{ mx: 1 }}
-          >
-            <Settings />
-          </IconButton>
-        </Tooltip>
-
         {/* Profile */}
         <Tooltip title="Account">
           <IconButton
@@ -174,9 +162,6 @@ export default function Header() {
         >
           <MenuItem>
             <Person sx={{ mr: 2 }} /> Profile
-          </MenuItem>
-          <MenuItem>
-            <Settings sx={{ mr: 2 }} /> Settings
           </MenuItem>
           <Divider />
           <MenuItem sx={{ color: 'error.main' }}>

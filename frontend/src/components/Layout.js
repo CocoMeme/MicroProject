@@ -20,11 +20,7 @@ import {
 } from '@mui/material';
 import {
   Menu as MenuIcon,
-  Dashboard as DashboardIcon,
-  LocalShipping as ShippingIcon,
   Inventory as InventoryIcon,
-  Assessment as ReportsIcon,
-  Settings as SettingsIcon,
   Notifications as NotificationsIcon,
   Person as PersonIcon,
   ChevronLeft as ChevronLeftIcon,
@@ -32,11 +28,6 @@ import {
   Store as StoreIcon,
 } from '@mui/icons-material';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
-import Dashboard from '../pages/Dashboard';
-import Parcels from '../pages/Parcels';
-import Shipping from '../pages/Shipping';
-import Reports from '../pages/Reports';
-import Settings from '../pages/Settings';
 import Orders from '../pages/Orders';
 import Products from '../pages/Products';
 
@@ -44,12 +35,7 @@ const drawerWidth = 280;
 
 const menuItems = [
   { text: 'Products', icon: <StoreIcon />, path: '/products' },
-  { text: 'Dashboard', icon: <DashboardIcon />, path: '/' },
   { text: 'Orders', icon: <OrdersIcon />, path: '/orders' },
-  { text: 'Parcels', icon: <InventoryIcon />, path: '/parcels' },
-  { text: 'Shipping', icon: <ShippingIcon />, path: '/shipping' },
-  { text: 'Reports', icon: <ReportsIcon />, path: '/reports' },
-  { text: 'Settings', icon: <SettingsIcon />, path: '/settings' },
 ];
 
 export default function Layout() {
@@ -209,13 +195,9 @@ export default function Layout() {
         }}
       >
         <Routes>
-          <Route path="/" element={<Dashboard />} />
+          <Route path="/" element={<Products />} />
           <Route path="/products" element={<Products />} />
           <Route path="/orders" element={<Orders />} />
-          <Route path="/parcels" element={<Parcels />} />
-          <Route path="/shipping" element={<Shipping />} />
-          <Route path="/reports" element={<Reports />} />
-          <Route path="/settings" element={<Settings />} />
         </Routes>
       </Box>
 

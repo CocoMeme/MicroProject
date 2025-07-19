@@ -11,11 +11,6 @@ import {
   useTheme,
 } from '@mui/material';
 import {
-  Dashboard as DashboardIcon,
-  LocalShipping as ShippingIcon,
-  Inventory as InventoryIcon,
-  Assessment as ReportsIcon,
-  Settings as SettingsIcon,
   Person as PersonIcon,
   ChevronLeft as ChevronLeftIcon,
   ShoppingCart as OrdersIcon,
@@ -25,14 +20,9 @@ import {
 import { useLocation, useNavigate } from 'react-router-dom';
 
 const menuItems = [
-  { text: 'Dashboard', icon: <DashboardIcon />, path: '/admin' },
   { text: 'Orders', icon: <OrdersIcon />, path: '/admin/orders' },
   { text: 'Scanner', icon: <ScannerIcon />, path: '/admin/scanner' },
   { text: 'MQTT Test', icon: <MQTTIcon />, path: '/admin/mqtt-test' },
-  { text: 'Parcels', icon: <InventoryIcon />, path: '/admin/parcels' },
-  { text: 'Shipping', icon: <ShippingIcon />, path: '/admin/shipping' },
-  { text: 'Reports', icon: <ReportsIcon />, path: '/admin/reports' },
-  { text: 'Settings', icon: <SettingsIcon />, path: '/admin/settings' },
 ];
 
 export default function AdminSidebar({ open, onDrawerToggle }) {
