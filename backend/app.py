@@ -126,6 +126,20 @@ def init_db():
         )
     ''')
     
+    # Create loaded_sensor_data table to store MQTT sensor data temporarily
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS loaded_sensor_data (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            weight REAL,
+            width REAL,
+            height REAL,
+            length REAL,
+            loadcell_timestamp TEXT,
+            box_dimensions_timestamp TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
     conn.commit()
     conn.close()
 
@@ -768,6 +782,65 @@ def get_full_system_status():
             'details': str(e)
         }), 503
 
+@app.route('/api/system/start', methods=['POST'])
+def start_system():
+    """Start the box measurement system via Raspberry Pi"""
+    try:
+        # Check if Raspberry Pi is reachable
+        health_response = requests.get(f"{RASPBERRY_PI_URL}/", timeout=5)
+        if not health_response.ok:
+            return jsonify({
+                'error': 'Raspberry Pi unreachable',
+                'message': 'Cannot connect to Raspberry Pi server'
+            }), 503
+        
+        # Send start command to Raspberry Pi
+        start_response = requests.post(f"{RASPBERRY_PI_URL}/api/start-box-measurement", timeout=10)
+        
+        if start_response.ok:
+            response_data = start_response.json()
+            
+            # Log the system start event
+            print(f"🚀 System started: {response_data.get('message', 'Box measurement initiated')}")
+            
+            # Emit WebSocket notification to connected clients
+            socketio.emit('system_started', {
+                'message': 'Box measurement system started',
+                'timestamp': datetime.now().isoformat(),
+                'initiated_from': 'admin_dashboard'
+            })
+            
+            return jsonify({
+                'success': True,
+                'message': 'System started successfully',
+                'details': response_data.get('message', 'Box measurement initiated'),
+                'timestamp': datetime.now().isoformat()
+            })
+        else:
+            error_data = start_response.json() if start_response.headers.get('content-type', '').startswith('application/json') else {}
+            return jsonify({
+                'error': 'Failed to start system',
+                'message': error_data.get('message', 'Raspberry Pi returned an error'),
+                'details': error_data.get('details', f'HTTP {start_response.status_code}')
+            }), start_response.status_code
+            
+    except requests.Timeout:
+        return jsonify({
+            'error': 'Request timeout',
+            'message': 'Raspberry Pi did not respond in time'
+        }), 504
+    except requests.RequestException as e:
+        return jsonify({
+            'error': 'Communication error',
+            'message': 'Failed to communicate with Raspberry Pi',
+            'details': str(e)
+        }), 503
+    except Exception as e:
+        return jsonify({
+            'error': 'Internal server error',
+            'details': str(e)
+        }), 500
+
 # WebSocket event handlers
 @socketio.on('connect')
 def handle_connect():
@@ -982,12 +1055,17 @@ def get_all_package_information():
             FROM package_information pi
             LEFT JOIN orders o ON pi.order_id = o.id
             ORDER BY pi.created_at DESC
+            LIMIT 50
         ''')
         package_info = c.fetchall()
         
         conn.close()
         
-        return jsonify(package_info)
+        return jsonify({
+            'packages': package_info,
+            'count': len(package_info),
+            'timestamp': datetime.now().isoformat()
+        })
         
     except Exception as e:
         return jsonify({
@@ -1090,15 +1168,40 @@ def validate_qr_code():
                     'scanned_at': already_scanned['scanned_at']
                 }
             else:
+                # Get sensor data if available
+                c.execute('SELECT * FROM loaded_sensor_data ORDER BY created_at DESC LIMIT 1')
+                sensor_data = c.fetchone()
+                
                 # Insert into scanned_codes table as verified
                 try:
                     c.execute('''
                         INSERT INTO scanned_codes (order_id, order_number, isverified, device)
                         VALUES (?, ?, ?, ?)
                     ''', (order['id'], order['order_number'], 'yes', 'raspberry_pi'))
+                    
+                    # If sensor data exists, create package information and then clear sensor data
+                    if sensor_data:
+                        # Create package information record
+                        c.execute('''
+                            INSERT INTO package_information 
+                            (order_id, order_number, weight, width, height, length, timestamp)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ''', (
+                            order['id'],
+                            order['order_number'],
+                            sensor_data['weight'],
+                            sensor_data['width'],
+                            sensor_data['height'],
+                            sensor_data['length'],
+                            datetime.now().isoformat()
+                        ))
+                        
+                        # Clear sensor data after successful validation
+                        c.execute('DELETE FROM loaded_sensor_data')
+                    
                     conn.commit()
                     
-                    # Also get package information if it exists
+                    # Get package information if it exists
                     c.execute('SELECT * FROM package_information WHERE order_id = ?', (order['id'],))
                     package_info = c.fetchone()
                     
@@ -1112,7 +1215,8 @@ def validate_qr_code():
                         'amount': order['amount'],
                         'date': order['date'],
                         'message': 'Valid - Successfully scanned',
-                        'package_information': package_info
+                        'package_information': package_info,
+                        'sensor_data_applied': sensor_data is not None
                     }
                 except sqlite3.IntegrityError:
                     # Handle race condition where another scan might have inserted the same order
@@ -1143,6 +1247,95 @@ def validate_qr_code():
             'valid': False, 
             'already_scanned': False,
             'message': f'Database error: {str(e)}'
+        }), 500
+
+@app.route('/api/sensor-data', methods=['POST'])
+def store_sensor_data():
+    """Store sensor data from MQTT (loadcell and box dimensions)"""
+    try:
+        data = request.get_json()
+        
+        conn = sqlite3.connect('database.db')
+        c = conn.cursor()
+        
+        # Clear any existing sensor data first
+        c.execute('DELETE FROM loaded_sensor_data')
+        
+        # Insert new sensor data
+        c.execute('''
+            INSERT INTO loaded_sensor_data 
+            (weight, width, height, length, loadcell_timestamp, box_dimensions_timestamp)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (
+            data.get('weight'),
+            data.get('width'),
+            data.get('height'),
+            data.get('length'),
+            data.get('loadcell_timestamp'),
+            data.get('box_dimensions_timestamp')
+        ))
+        
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            'message': 'Sensor data stored successfully',
+            'timestamp': datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        print(f"Error storing sensor data: {e}")
+        return jsonify({
+            'error': 'Failed to store sensor data',
+            'details': str(e)
+        }), 500
+
+@app.route('/api/sensor-data', methods=['GET'])
+def get_sensor_data():
+    """Get current sensor data"""
+    try:
+        conn = sqlite3.connect('database.db')
+        conn.row_factory = dict_factory
+        c = conn.cursor()
+        
+        c.execute('SELECT * FROM loaded_sensor_data ORDER BY created_at DESC LIMIT 1')
+        sensor_data = c.fetchone()
+        
+        conn.close()
+        
+        return jsonify({
+            'sensor_data': sensor_data,
+            'timestamp': datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        print(f"Error getting sensor data: {e}")
+        return jsonify({
+            'error': 'Failed to get sensor data',
+            'details': str(e)
+        }), 500
+
+@app.route('/api/sensor-data', methods=['DELETE'])
+def clear_sensor_data():
+    """Clear all sensor data"""
+    try:
+        conn = sqlite3.connect('database.db')
+        c = conn.cursor()
+        
+        c.execute('DELETE FROM loaded_sensor_data')
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            'message': 'Sensor data cleared successfully',
+            'timestamp': datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        print(f"Error clearing sensor data: {e}")
+        return jsonify({
+            'error': 'Failed to clear sensor data',
+            'details': str(e)
         }), 500
 
 if __name__ == '__main__':

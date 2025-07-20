@@ -33,6 +33,7 @@ export default function Dashboard() {
   const [raspiStatus, setRaspiStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState(null);
+  const [startingSystem, setStartingSystem] = useState(false);
 
   // Fetch Raspberry Pi status
   const fetchRaspiStatus = async () => {
@@ -52,6 +53,34 @@ export default function Dashboard() {
       setLastUpdated(new Date().toLocaleString());
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Start the box measurement system
+  const startSystem = async () => {
+    try {
+      setStartingSystem(true);
+      const response = await fetch(`${process.env.REACT_APP_API_ENDPOINT || 'http://192.168.100.61:5000/api'}/system/start`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        console.log('✅ System started successfully:', data);
+        alert(`System started successfully!\n${data.message}`);
+      } else {
+        console.error('❌ Failed to start system:', data);
+        alert(`Failed to start system:\n${data.message || data.error}`);
+      }
+    } catch (error) {
+      console.error('❌ Error starting system:', error);
+      alert(`Error starting system:\n${error.message}`);
+    } finally {
+      setStartingSystem(false);
     }
   };
 
@@ -96,7 +125,9 @@ export default function Dashboard() {
       label: 'Start System', 
       icon: <PlayIcon />, 
       color: 'success',
-      variant: 'contained'
+      variant: 'contained',
+      action: startSystem,
+      loading: startingSystem
     },
     { 
       label: 'Stop System', 
@@ -197,8 +228,9 @@ export default function Dashboard() {
                   variant={button.variant}
                   color={button.color}
                   size="small"
-                  startIcon={button.icon}
+                  startIcon={button.loading ? <CircularProgress size={16} /> : button.icon}
                   fullWidth
+                  disabled={button.loading}
                   sx={{
                     flex: 1,
                     py: 1,
@@ -209,20 +241,20 @@ export default function Dashboard() {
                     minHeight: '40px',
                     maxHeight: '50px',
                     '&:hover': {
-                      transform: 'translateY(-1px)',
-                      boxShadow: theme.shadows[3],
+                      transform: button.loading ? 'none' : 'translateY(-1px)',
+                      boxShadow: button.loading ? 'none' : theme.shadows[3],
                     },
                     transition: 'all 0.2s ease-in-out',
                   }}
                   onClick={() => {
-                    if (button.action) {
+                    if (button.action && !button.loading) {
                       button.action();
-                    } else {
+                    } else if (!button.action && !button.loading) {
                       console.log(`${button.label} clicked`);
                     }
                   }}
                 >
-                  {button.label}
+                  {button.loading ? (button.label === 'Start System' ? 'Starting...' : button.label) : button.label}
                 </Button>
               ))}
             </Box>

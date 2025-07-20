@@ -92,6 +92,10 @@ class MQTTListener:
                     mqtt_sensor_data['loadcell']['weight'] = weight
                     mqtt_sensor_data['loadcell']['timestamp'] = datetime.now().isoformat()
                     logger.info(f"📏 LOADCELL: Weight updated to {weight}")
+                    
+                    # Store sensor data in database
+                    store_sensor_data_in_db()
+                    
                 except ValueError:
                     logger.warning(f"Invalid weight value received: {message}")
             
@@ -107,6 +111,10 @@ class MQTTListener:
                         mqtt_sensor_data['box_dimensions']['length'] = length
                         mqtt_sensor_data['box_dimensions']['timestamp'] = datetime.now().isoformat()
                         logger.info(f"📦 BOX DIMENSIONS: W:{width}, H:{height}, L:{length}")
+                        
+                        # Store sensor data in database
+                        store_sensor_data_in_db()
+                        
                     else:
                         logger.warning(f"Invalid box dimensions format: {message}")
                 except ValueError:
@@ -175,6 +183,24 @@ class MQTTListener:
         except Exception as e:
             logger.error(f"Error stopping MQTT listener: {e}")
 
+    def publish_message(self, topic, message):
+        """Publish a message to MQTT broker"""
+        try:
+            if self.is_connected:
+                result = self.client.publish(topic, message)
+                if result.rc == 0:
+                    logger.info(f"📤 MQTT: Successfully published '{message}' to topic '{topic}'")
+                    return True
+                else:
+                    logger.error(f"❌ MQTT: Failed to publish message. Return code: {result.rc}")
+                    return False
+            else:
+                logger.error("❌ MQTT: Cannot publish - not connected to broker")
+                return False
+        except Exception as e:
+            logger.error(f"❌ MQTT: Error publishing message: {e}")
+            return False
+
     def get_status(self):
         """Get MQTT connection status"""
         return {
@@ -200,11 +226,64 @@ mqtt_sensor_data = {
     }
 }
 
-@app.route('/api/clear-sensor-data', methods=['POST'])
-def clear_sensor_data():
-    """Manually clear stored sensor data"""
+# QR scan monitoring variables
+last_scan_id = 0
+sensor_data_loaded = False
+
+def check_for_new_qr_scans():
+    """Check for new QR code scans and clear sensor data if valid scan detected"""
+    global last_scan_id, sensor_data_loaded
+    
     try:
-        global mqtt_sensor_data
+        backend_url = 'http://192.168.100.61:5000/api/qr-scans?limit=1'
+        response = requests.get(backend_url, timeout=5)
+        
+        if response.status_code == 200:
+            scans = response.json()
+            if scans and len(scans) > 0:
+                latest_scan = scans[0]
+                scan_id = latest_scan.get('id', 0)
+                
+                # Check if this is a new scan
+                if scan_id > last_scan_id:
+                    last_scan_id = scan_id
+                    
+                    # Log the new scan
+                    qr_data = latest_scan.get('qr_data', 'Unknown')
+                    is_valid = latest_scan.get('is_valid', False)
+                    timestamp = latest_scan.get('timestamp', 'Unknown')
+                    
+                    logger.info(f"🔍 NEW QR SCAN DETECTED: {qr_data} (Valid: {is_valid})")
+                    
+                    # If valid scan and we have sensor data loaded, clear it
+                    if is_valid and sensor_data_loaded:
+                        logger.info("✅ Valid QR scan detected - clearing sensor data...")
+                        clear_mqtt_sensor_data()
+                        
+                        # Emit WebSocket notification
+                        socketio.emit('qr_scan_processed', {
+                            'qr_data': qr_data,
+                            'timestamp': timestamp,
+                            'sensor_data_cleared': True
+                        })
+                        
+                        logger.info("🎉 Workflow completed! Ready for next package.")
+                    elif not is_valid:
+                        logger.info("❌ Invalid QR scan - sensor data remains loaded")
+                    elif not sensor_data_loaded:
+                        logger.info("ℹ️ QR scan detected but no sensor data to clear")
+                        
+    except requests.RequestException as e:
+        logger.error(f"❌ Error checking for QR scans: {e}")
+    except Exception as e:
+        logger.error(f"❌ Unexpected error in QR scan monitoring: {e}")
+
+def clear_mqtt_sensor_data():
+    """Clear MQTT sensor data after successful QR scan"""
+    global mqtt_sensor_data, sensor_data_loaded
+    
+    try:
+        # Clear local MQTT data
         mqtt_sensor_data['loadcell']['weight'] = None
         mqtt_sensor_data['loadcell']['timestamp'] = None
         mqtt_sensor_data['box_dimensions']['width'] = None
@@ -212,10 +291,109 @@ def clear_sensor_data():
         mqtt_sensor_data['box_dimensions']['length'] = None
         mqtt_sensor_data['box_dimensions']['timestamp'] = None
         
+        # Clear sensor data from main backend database
+        backend_url = 'http://192.168.100.61:5000/api/sensor-data'
+        response = requests.delete(backend_url, timeout=5)
+        
+        if response.status_code == 200:
+            logger.info("🗑️ Sensor data cleared from database successfully!")
+            sensor_data_loaded = False
+        else:
+            logger.warning(f"⚠️ Failed to clear sensor data from database: {response.status_code}")
+            
+    except requests.RequestException as e:
+        logger.error(f"❌ Error clearing sensor data from database: {e}")
+    except Exception as e:
+        logger.error(f"❌ Unexpected error clearing sensor data: {e}")
+
+def start_qr_monitoring():
+    """Start QR scan monitoring in a background thread"""
+    global last_scan_id
+    
+    # Initialize last_scan_id to current latest scan to avoid processing old scans
+    try:
+        backend_url = 'http://192.168.100.61:5000/api/qr-scans?limit=1'
+        response = requests.get(backend_url, timeout=5)
+        if response.status_code == 200:
+            scans = response.json()
+            if scans and len(scans) > 0:
+                last_scan_id = scans[0].get('id', 0)
+                logger.info(f"📊 Initialized QR monitoring from scan ID: {last_scan_id}")
+    except:
+        logger.warning("⚠️ Could not initialize last scan ID - will start from 0")
+    
+    def monitor_loop():
+        logger.info("👀 Starting QR scan monitoring...")
+        while True:
+            try:
+                check_for_new_qr_scans()
+                time.sleep(2)  # Check every 2 seconds
+            except Exception as e:
+                logger.error(f"❌ Error in QR monitoring loop: {e}")
+                time.sleep(5)  # Wait longer on error
+    
+    # Start monitoring in background thread
+    monitor_thread = threading.Thread(target=monitor_loop, daemon=True)
+    monitor_thread.start()
+    logger.info("✅ QR scan monitoring started in background")
+
+def store_sensor_data_in_db():
+    """Store current sensor data in database"""
+    global sensor_data_loaded
+    
+    try:
+        # Send sensor data to main backend
+        backend_url = 'http://192.168.100.61:5000/api/sensor-data'
+        sensor_data = {
+            'weight': mqtt_sensor_data['loadcell']['weight'],
+            'width': mqtt_sensor_data['box_dimensions']['width'],
+            'height': mqtt_sensor_data['box_dimensions']['height'],
+            'length': mqtt_sensor_data['box_dimensions']['length'],
+            'loadcell_timestamp': mqtt_sensor_data['loadcell']['timestamp'],
+            'box_dimensions_timestamp': mqtt_sensor_data['box_dimensions']['timestamp']
+        }
+        
+        # Only send if we have some data
+        if any(value is not None for value in [sensor_data['weight'], sensor_data['width'], 
+                                               sensor_data['height'], sensor_data['length']]):
+            response = requests.post(backend_url, json=sensor_data, timeout=5)
+            if response.status_code == 200:
+                logger.info("✅ Sensor data stored in database successfully")
+                sensor_data_loaded = True  # Mark that we have sensor data loaded
+                
+                # Log current sensor status
+                weight = sensor_data['weight'] or 'N/A'
+                width = sensor_data['width'] or 'N/A'
+                height = sensor_data['height'] or 'N/A'
+                length = sensor_data['length'] or 'N/A'
+                logger.info(f"📊 Current sensor data: Weight={weight}kg, Dimensions={width}x{height}x{length}cm")
+            else:
+                logger.warning(f"⚠️ Failed to store sensor data: {response.status_code}")
+        
+    except requests.RequestException as e:
+        logger.error(f"❌ Error storing sensor data in database: {e}")
+    except Exception as e:
+        logger.error(f"❌ Unexpected error storing sensor data: {e}")
+
+@app.route('/api/clear-sensor-data', methods=['POST'])
+def clear_sensor_data():
+    """Manually clear stored sensor data"""
+    try:
+        global mqtt_sensor_data, sensor_data_loaded
+        mqtt_sensor_data['loadcell']['weight'] = None
+        mqtt_sensor_data['loadcell']['timestamp'] = None
+        mqtt_sensor_data['box_dimensions']['width'] = None
+        mqtt_sensor_data['box_dimensions']['height'] = None
+        mqtt_sensor_data['box_dimensions']['length'] = None
+        mqtt_sensor_data['box_dimensions']['timestamp'] = None
+        sensor_data_loaded = False  # Mark that sensor data is cleared
+        
         # Emit update via WebSocket
         socketio.emit('sensor_data_cleared', {
             'timestamp': datetime.now().isoformat()
         })
+        
+        logger.info("🗑️ Sensor data manually cleared")
         
         return jsonify({
             'message': 'Sensor data cleared successfully',
@@ -235,12 +413,40 @@ def get_mqtt_sensor_data():
     try:
         return jsonify({
             'sensor_data': mqtt_sensor_data,
+            'sensor_data_loaded': sensor_data_loaded,
             'timestamp': datetime.now().isoformat()
         })
     except Exception as e:
         logger.error(f"Error getting MQTT sensor data: {str(e)}")
         return jsonify({
             'error': 'Failed to get MQTT sensor data',
+            'details': str(e)
+        }), 500
+
+@app.route('/api/sensor-status')
+def get_sensor_status():
+    """Get sensor workflow status"""
+    try:
+        # Check if we have any sensor data
+        has_weight = mqtt_sensor_data['loadcell']['weight'] is not None
+        has_dimensions = any([
+            mqtt_sensor_data['box_dimensions']['width'] is not None,
+            mqtt_sensor_data['box_dimensions']['height'] is not None,
+            mqtt_sensor_data['box_dimensions']['length'] is not None
+        ])
+        
+        return jsonify({
+            'sensor_data_loaded': sensor_data_loaded,
+            'has_weight_data': has_weight,
+            'has_dimension_data': has_dimensions,
+            'last_scan_id': last_scan_id,
+            'current_sensor_data': mqtt_sensor_data,
+            'timestamp': datetime.now().isoformat()
+        })
+    except Exception as e:
+        logger.error(f"Error getting sensor status: {str(e)}")
+        return jsonify({
+            'error': 'Failed to get sensor status',
             'details': str(e)
         }), 500
 
@@ -385,6 +591,48 @@ def restart_mqtt():
         logger.error(f"Error restarting MQTT listener: {str(e)}")
         return jsonify({
             'error': 'Failed to restart MQTT listener',
+            'details': str(e)
+        }), 500
+
+@app.route('/api/start-box-measurement', methods=['POST'])
+def start_box_measurement():
+    """Start box measurement by sending MQTT command to ESP32"""
+    try:
+        # Check if MQTT is connected
+        if not mqtt_listener.is_connected:
+            return jsonify({
+                'error': 'MQTT not connected',
+                'message': 'Cannot start box measurement - MQTT broker not connected'
+            }), 503
+        
+        # Publish start command to ESP32
+        success = mqtt_listener.publish_message('esp32/box/request', 'start')
+        
+        if success:
+            logger.info("🚀 Box measurement started via MQTT command")
+            # Emit WebSocket notification
+            socketio.emit('system_command', {
+                'command': 'start_box_measurement',
+                'status': 'success',
+                'message': 'Box measurement started',
+                'timestamp': datetime.now().isoformat()
+            })
+            
+            return jsonify({
+                'success': True,
+                'message': 'Box measurement started successfully',
+                'timestamp': datetime.now().isoformat()
+            })
+        else:
+            return jsonify({
+                'error': 'Failed to send MQTT command',
+                'message': 'Could not publish start command to ESP32'
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Error starting box measurement: {str(e)}")
+        return jsonify({
+            'error': 'Failed to start box measurement',
             'details': str(e)
         }), 500
 
@@ -1348,8 +1596,15 @@ if __name__ == '__main__':
     except Exception as e:
         logger.error(f"Failed to start MQTT listener at startup: {str(e)}")
     
+    # Start QR scan monitoring
+    try:
+        start_qr_monitoring()
+        logger.info("QR scan monitoring started at startup")
+    except Exception as e:
+        logger.error(f"Failed to start QR scan monitoring at startup: {str(e)}")
+    
     # Run the server with SocketIO - simplified configuration
-    logger.info("Starting Flask-SocketIO server with integrated MQTT listener")
+    logger.info("Starting Flask-SocketIO server with integrated MQTT listener and QR monitoring")
     
     # Simple SocketIO startup to avoid Werkzeug conflicts
     socketio.run(app, 

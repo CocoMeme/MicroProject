@@ -55,6 +55,8 @@ export default function Scanner() {
   const [isConnecting, setIsConnecting] = useState(false);
   const [lastRefresh, setLastRefresh] = useState(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [packageData, setPackageData] = useState([]);
+  const [isLoadingPackages, setIsLoadingPackages] = useState(false);
   
   // Modal states
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
@@ -80,6 +82,9 @@ export default function Scanner() {
     
     // Immediately refresh QR history when new scan is detected
     getQRHistory();
+    
+    // Also refresh package information to get latest sensor data
+    getPackageInformation();
   }, []);
 
   const handleQRHistoryUpdated = useCallback((data) => {
@@ -167,6 +172,9 @@ export default function Scanner() {
       
       // Get initial QR history when WebSocket connects
       getQRHistory();
+      
+      // Get initial package information
+      getPackageInformation();
 
       // Update connection info periodically
       const connectionInterval = setInterval(() => {
@@ -184,7 +192,10 @@ export default function Scanner() {
       let qrInterval;
       let historyInterval;
       if (isStreaming) {
-        historyInterval = setInterval(getQRHistory, 5000); // Refresh history every 5 seconds
+        historyInterval = setInterval(() => {
+          getQRHistory();
+          getPackageInformation();
+        }, 5000); // Refresh both history and package info every 5 seconds
       }
 
       return () => {
@@ -219,6 +230,9 @@ export default function Scanner() {
           
           // Get initial QR history
           getQRHistory();
+          
+          // Get initial package information
+          getPackageInformation();
         } catch (err) {
           console.error('Failed to auto-start camera:', err);
         }
@@ -234,6 +248,9 @@ export default function Scanner() {
   useEffect(() => {
     // Load QR history immediately when component mounts
     getQRHistory();
+    
+    // Load package information immediately when component mounts
+    getPackageInformation();
     
     // Also check camera status
     checkStatus();
@@ -337,6 +354,32 @@ export default function Scanner() {
       console.error('Failed to get QR history:', err);
     } finally {
       setIsLoadingHistory(false);
+    }
+  };
+
+  const getPackageInformation = async () => {
+    setIsLoadingPackages(true);
+    try {
+      console.log('Fetching package information...'); // Debug log
+      const response = await fetch(`${BACKEND_SERVER}/api/package-information`, {
+        cache: 'no-cache',
+        headers: {
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache'
+        }
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        console.log('Package information retrieved:', data); // Debug log
+        setPackageData(data.packages || []);
+      } else {
+        console.error('Failed to fetch package information:', response.status);
+      }
+    } catch (err) {
+      console.error('Failed to get package information:', err);
+    } finally {
+      setIsLoadingPackages(false);
     }
   };
 
@@ -797,26 +840,124 @@ export default function Scanner() {
 
       {/* Package Information Table */}
       <Paper sx={{ p: { xs: 2, sm: 3 }, mt: { xs: 2, sm: 3 } }}>
-        <Typography variant="h6" gutterBottom sx={{ fontSize: { xs: '1.1rem', sm: '1.25rem' } }}>
-          Package Information
-        </Typography>
-        <TableContainer>
-          <Table sx={{ minWidth: 650 }} aria-label="package information table">
-            <TableHead>
-              <TableRow>
-                <TableCell>Order Id</TableCell>
-                <TableCell>Package Size</TableCell>
-                <TableCell>Package Weight</TableCell>
-                <TableCell>Package Height</TableCell>
-                <TableCell>Package Width</TableCell>
-                <TableCell>Package Length</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {/* Empty table for now - will be populated later */}
-            </TableBody>
-          </Table>
-        </TableContainer>
+        <Box sx={{ 
+          display: 'flex', 
+          justifyContent: 'space-between', 
+          alignItems: 'center', 
+          mb: 2,
+          flexWrap: 'wrap',
+          gap: 1
+        }}>
+          <Typography variant="h6" gutterBottom sx={{ fontSize: { xs: '1.1rem', sm: '1.25rem' }, mb: 0 }}>
+            Package Information with Sensor Data ({packageData.length})
+          </Typography>
+          {isLoadingPackages && (
+            <CircularProgress size={20} />
+          )}
+        </Box>
+        
+        {packageData.length === 0 ? (
+          <Box sx={{ 
+            display: 'flex', 
+            flexDirection: 'column', 
+            alignItems: 'center', 
+            justifyContent: 'center',
+            py: 4,
+            color: 'text.secondary'
+          }}>
+            <Typography variant="body2" align="center">
+              No package information available yet
+            </Typography>
+            <Typography variant="caption" align="center" sx={{ mt: 1 }}>
+              Scan QR codes to see package data with sensor measurements
+            </Typography>
+          </Box>
+        ) : (
+          <TableContainer>
+            <Table sx={{ minWidth: 650 }} aria-label="package information table">
+              <TableHead>
+                <TableRow>
+                  <TableCell><strong>Order Number</strong></TableCell>
+                  <TableCell><strong>Customer</strong></TableCell>
+                  <TableCell><strong>Product</strong></TableCell>
+                  <TableCell align="right"><strong>Weight (kg)</strong></TableCell>
+                  <TableCell align="right"><strong>Height (cm)</strong></TableCell>
+                  <TableCell align="right"><strong>Width (cm)</strong></TableCell>
+                  <TableCell align="right"><strong>Length (cm)</strong></TableCell>
+                  <TableCell><strong>Timestamp</strong></TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {packageData.map((pkg, index) => (
+                  <TableRow 
+                    key={pkg.id || index} 
+                    sx={{ 
+                      '&:nth-of-type(odd)': { 
+                        backgroundColor: 'action.hover' 
+                      },
+                      '&:hover': {
+                        backgroundColor: 'action.selected'
+                      }
+                    }}
+                  >
+                    <TableCell component="th" scope="row">
+                      <Typography variant="body2" sx={{ fontWeight: 'medium' }}>
+                        {pkg.order_number || 'N/A'}
+                      </Typography>
+                    </TableCell>
+                    <TableCell>
+                      <Typography variant="body2">
+                        {pkg.customer_name || 'N/A'}
+                      </Typography>
+                    </TableCell>
+                    <TableCell>
+                      <Typography variant="body2">
+                        {pkg.product_name || 'N/A'}
+                      </Typography>
+                    </TableCell>
+                    <TableCell align="right">
+                      <Chip 
+                        label={pkg.weight ? `${pkg.weight} kg` : 'N/A'} 
+                        size="small" 
+                        color={pkg.weight ? 'primary' : 'default'}
+                        variant={pkg.weight ? 'filled' : 'outlined'}
+                      />
+                    </TableCell>
+                    <TableCell align="right">
+                      <Chip 
+                        label={pkg.height ? `${pkg.height} cm` : 'N/A'} 
+                        size="small" 
+                        color={pkg.height ? 'secondary' : 'default'}
+                        variant={pkg.height ? 'filled' : 'outlined'}
+                      />
+                    </TableCell>
+                    <TableCell align="right">
+                      <Chip 
+                        label={pkg.width ? `${pkg.width} cm` : 'N/A'} 
+                        size="small" 
+                        color={pkg.width ? 'info' : 'default'}
+                        variant={pkg.width ? 'filled' : 'outlined'}
+                      />
+                    </TableCell>
+                    <TableCell align="right">
+                      <Chip 
+                        label={pkg.length ? `${pkg.length} cm` : 'N/A'} 
+                        size="small" 
+                        color={pkg.length ? 'success' : 'default'}
+                        variant={pkg.length ? 'filled' : 'outlined'}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Typography variant="caption" color="text.secondary">
+                        {pkg.timestamp ? new Date(pkg.timestamp).toLocaleString() : 'N/A'}
+                      </Typography>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        )}
       </Paper>
 
       {/* Fullscreen Camera Modal */}
