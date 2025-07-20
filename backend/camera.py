@@ -64,6 +64,24 @@ class CameraManager:
 			self.scanned_qr_codes = set()  # Track already scanned QR codes to prevent duplicates
 			self.duplicate_prevention_enabled = True  # Flag to enable/disable duplicate prevention
 			
+			# Message display timing variables
+			self.display_message = None
+			self.display_message_color = None
+			self.display_message_start_time = None
+			self.display_message_duration = 0
+			self.pending_already_scanned = False
+			self.pending_already_scanned_start_time = None
+			self.current_qr_data = None
+			self.current_qr_rect = None
+			
+			# QR scanning cycle variables
+			self.scanning_enabled = False
+			self.scan_start_time = None
+			self.countdown_delay = 10.0  # 10 seconds countdown before scanning
+			self.scanning_duration = 60.0  # 60 seconds of active scanning
+			self.scanning_session_start = None
+			self.scanning_state = "countdown"  # "countdown", "scanning", "session_ended"
+			
 			# Create directory for QR code images
 			self.qr_images_dir = 'qr_images'
 			if not os.path.exists(self.qr_images_dir):
@@ -122,6 +140,91 @@ class CameraManager:
 			"""Enable or disable duplicate prevention"""
 			self.duplicate_prevention_enabled = enabled
 			logger.info(f"Duplicate prevention {'enabled' if enabled else 'disabled'}")
+
+		def reset_scan_cycle(self):
+			"""Reset the scanning cycle to start countdown again"""
+			self.scanning_enabled = False
+			self.scan_start_time = time.time()
+			self.scanning_state = "countdown"
+			self.scanning_session_start = None
+			# Clear any existing messages
+			self.display_message = None
+			self.display_message_start_time = None
+			self.pending_already_scanned = False
+			self.pending_already_scanned_start_time = None
+			self.current_qr_data = None
+			self.current_qr_rect = None
+			logger.info(f"Scanning cycle reset - Starting countdown ({self.countdown_delay}s countdown, {self.scanning_duration}s scanning session)")
+
+		def reset_scan_cycle_if_running(self):
+			"""Reset the scanning cycle even if camera is already running"""
+			if self.running:
+				self.scanning_enabled = False
+				self.scan_start_time = time.time()
+				self.scanning_state = "countdown"
+				self.scanning_session_start = None
+				# Clear any existing messages
+				self.display_message = None
+				self.display_message_start_time = None
+				self.pending_already_scanned = False
+				self.pending_already_scanned_start_time = None
+				self.current_qr_data = None
+				self.current_qr_rect = None
+				logger.info(f"Scanning cycle reset while camera running - Starting countdown ({self.countdown_delay}s countdown, {self.scanning_duration}s scanning session)")
+				return True
+			else:
+				logger.warning("Cannot reset scan cycle - camera is not running")
+				return False
+
+		def start_scanning_session_immediately(self):
+			"""Start scanning session immediately, skipping countdown"""
+			self.scanning_enabled = True
+			self.scanning_state = "scanning"
+			self.scanning_session_start = time.time()
+			self.scan_start_time = None
+			logger.info(f"Scanning session started immediately - {self.scanning_duration}s active period")
+
+		def get_scanning_status(self):
+			"""Get current scanning cycle status"""
+			if not self.scan_start_time and not self.scanning_session_start:
+				return {
+					"state": "disabled",
+					"scanning_enabled": False,
+					"time_remaining": 0,
+					"countdown_seconds": self.countdown_delay,
+					"scanning_duration": self.scanning_duration
+				}
+			
+			current_time = time.time()
+			
+			if self.scanning_state == "countdown" and self.scan_start_time:
+				time_elapsed = current_time - self.scan_start_time
+				time_remaining = max(0, self.countdown_delay - time_elapsed)
+				return {
+					"state": "countdown",
+					"scanning_enabled": False,
+					"time_remaining": int(time_remaining),
+					"countdown_seconds": self.countdown_delay,
+					"scanning_duration": self.scanning_duration
+				}
+			elif self.scanning_state == "scanning" and self.scanning_session_start:
+				session_elapsed = current_time - self.scanning_session_start
+				time_remaining = max(0, self.scanning_duration - session_elapsed)
+				return {
+					"state": "scanning",
+					"scanning_enabled": True,
+					"time_remaining": int(time_remaining),
+					"countdown_seconds": self.countdown_delay,
+					"scanning_duration": self.scanning_duration
+				}
+			else:
+				return {
+					"state": "unknown",
+					"scanning_enabled": self.scanning_enabled,
+					"time_remaining": 0,
+					"countdown_seconds": self.countdown_delay,
+					"scanning_duration": self.scanning_duration
+				}
 
 		def get_duplicate_prevention_status(self):
 			"""Get current duplicate prevention status"""
@@ -261,9 +364,14 @@ class CameraManager:
 			try:
 				self.picam2.start()
 				self.running = True
+				# Initialize scanning cycle
+				self.scanning_enabled = False
+				self.scan_start_time = time.time()
+				self.scanning_state = "countdown"
+				self.scanning_session_start = None
+				logger.info(f"Camera started - QR scanning countdown begins ({self.countdown_delay}s countdown, {self.scanning_duration}s scanning session)")
 				self.capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
 				self.capture_thread.start()
-				logger.info("Camera started")
 				return True
 			except Exception as e:
 				logger.error(f"Failed to start camera: {e}")
@@ -281,10 +389,22 @@ class CameraManager:
 
 			try:
 				self.running = False
+				# Reset scanning cycle state when camera stops
+				self.scanning_enabled = False
+				self.scan_start_time = None
+				self.scanning_state = "countdown"
+				self.scanning_session_start = None
+				self.display_message = None
+				self.display_message_start_time = None
+				self.pending_already_scanned = False
+				self.pending_already_scanned_start_time = None
+				self.current_qr_data = None
+				self.current_qr_rect = None
+				
 				self.picam2.stop()
 				if self.capture_thread:
 					self.capture_thread.join(timeout=2.0)
-				logger.info("Camera stopped")
+				logger.info("Camera stopped and scanning cycle reset")
 				return True
 			except Exception as e:
 				logger.error(f"Failed to stop camera: {e}")
@@ -306,30 +426,174 @@ class CameraManager:
 
 		def _scan_qr_code(self, frame):
 			try:
+				# Handle display messages with timing
+				current_time = time.time()
+				
+				# Handle scanning cycle states
+				if self.scan_start_time is not None:
+					if self.scanning_state == "countdown":
+						# Countdown phase
+						time_elapsed = current_time - self.scan_start_time
+						if time_elapsed < self.countdown_delay:
+							remaining_time = int(self.countdown_delay - time_elapsed)
+							cv2.putText(frame, f"Scanning starts in: {remaining_time}s", 
+									   (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+							cv2.putText(frame, "Position QR code now", 
+									   (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+							return frame
+						else:
+							# Countdown finished, start scanning session
+							self.scanning_enabled = True
+							self.scanning_state = "scanning"
+							self.scanning_session_start = current_time
+							logger.info(f"QR scanning session started - {self.scanning_duration}s active period")
+					
+					elif self.scanning_state == "scanning":
+						# Active scanning phase
+						session_elapsed = current_time - self.scanning_session_start
+						if session_elapsed >= self.scanning_duration:
+							# Scanning session ended, restart countdown
+							self.scanning_enabled = False
+							self.scanning_state = "countdown"
+							self.scan_start_time = current_time
+							self.scanning_session_start = None
+							logger.info(f"Scanning session ended - Starting new countdown ({self.countdown_delay}s)")
+							return frame
+						else:
+							# Show scanning session status
+							remaining_scan_time = int(self.scanning_duration - session_elapsed)
+							cv2.putText(frame, f"SCANNING ACTIVE: {remaining_scan_time}s left", 
+									   (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+				
+				# If scanning is not enabled, show appropriate message
+				if not self.scanning_enabled:
+					if self.scanning_state == "countdown":
+						cv2.putText(frame, "Preparing to scan...", 
+								   (50, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
+					return frame
+				
+				# Check if we need to show "Already Scanned!" message after valid message expires
+				if (self.pending_already_scanned and 
+					self.pending_already_scanned_start_time and 
+					current_time >= self.pending_already_scanned_start_time):
+					self.display_message = "Already Scanned!"
+					self.display_message_color = (0, 165, 255)  # Orange
+					self.display_message_start_time = current_time
+					self.display_message_duration = 3.0
+					self.pending_already_scanned = False
+					self.pending_already_scanned_start_time = None
+				
+				# Display current message if active
+				if (self.display_message and 
+					self.display_message_start_time and 
+					current_time - self.display_message_start_time < self.display_message_duration and
+					self.current_qr_rect):
+					x, y, w, h = self.current_qr_rect
+					cv2.putText(frame, f"{self.current_qr_data} - {self.display_message}", 
+							   (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, self.display_message_color, 2)
+				
+				# Clear message when expired
+				if (self.display_message_start_time and 
+					current_time - self.display_message_start_time >= self.display_message_duration):
+					self.display_message = None
+					self.display_message_color = None
+					self.display_message_start_time = None
+					self.current_qr_data = None
+					self.current_qr_rect = None
+
 				decoded_objects = decode(frame)
 				for obj in decoded_objects:
 					data = obj.data.decode('utf-8')
 					current_time = time.time()
 					
-					# Check for duplicate prevention first
-					if self.duplicate_prevention_enabled and self.is_qr_already_scanned(data):
-						# Draw a different colored box for already scanned QR codes
+					# Validate QR code with the database first
+					validation_result = self.validate_qr_with_database(data)
+					
+					# Check if this QR code was already scanned according to the backend
+					if validation_result.get('already_scanned', False):
+						# Show "Valid QR Code!" first for 5 seconds, then "Already Scanned!"
+						should_process = (
+							data != self.last_qr_data or 
+							self.last_qr_time is None or
+							(current_time - self.last_qr_time) >= self.qr_cooldown
+						)
+						
+						if should_process:
+							self.last_qr_data = data
+							self.last_qr_time = current_time
+							
+							# Store QR data and rect for message display
+							self.current_qr_data = data
+							self.current_qr_rect = obj.rect
+							
+							# Show "Valid QR Code!" first
+							self.display_message = "Valid QR Code!"
+							self.display_message_color = (0, 255, 0)  # Green
+							self.display_message_start_time = current_time
+							self.display_message_duration = 5.0
+							
+							# Schedule "Already Scanned!" message after 5 seconds
+							self.pending_already_scanned = True
+							self.pending_already_scanned_start_time = current_time + 5.0
+							
+							# Save QR code image
+							x, y, w, h = obj.rect
+							image_data = self.save_qr_image(frame, data, (x, y, w, h))
+							
+							# Add to history with image data
+							self.add_to_qr_history(data, validation_result, image_data)
+							
+							# Notify callbacks about new QR detection
+							self._notify_qr_callbacks(data, validation_result)
+							
+							logger.info(f"Already scanned QR code detected: {data}")
+						
+						# Draw orange box for already scanned QR codes
 						points = obj.polygon
 						if len(points) >= 4:
-							# Orange color for already scanned QR codes
 							pts = [(point.x, point.y) for point in points]
 							cv2.polylines(frame, [cv2.convexHull(np.array(pts, dtype=np.int32))], isClosed=True, color=(0, 165, 255), thickness=3)
 						
-						# Display "Already Scanned" message
+						continue  # Skip further processing this QR code
+					
+					# Check if this is invalid (not verified)
+					if not validation_result['valid']:
+						# Draw red box for invalid QR codes
+						points = obj.polygon
+						if len(points) >= 4:
+							pts = [(point.x, point.y) for point in points]
+							cv2.polylines(frame, [cv2.convexHull(np.array(pts, dtype=np.int32))], isClosed=True, color=(0, 0, 255), thickness=3)
+						
+						# Display "Invalid" message
 						x, y, w, h = obj.rect
-						cv2.putText(frame, f"{data} - Already Scanned", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
-						continue  # Skip processing this QR code
+						cv2.putText(frame, f"{data} - Not Valid", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+						
+						# Add to history for tracking but don't prevent re-scanning invalid codes
+						should_process = (
+							data != self.last_qr_data or 
+							self.last_qr_time is None or
+							(current_time - self.last_qr_time) >= self.qr_cooldown
+						)
+						
+						if should_process:
+							self.last_qr_data = data
+							self.last_qr_time = current_time
+							
+							# Save QR code image
+							x, y, w, h = obj.rect
+							image_data = self.save_qr_image(frame, data, (x, y, w, h))
+							
+							# Add to history with image data
+							self.add_to_qr_history(data, validation_result, image_data)
+							
+							# Notify callbacks about new QR detection
+							self._notify_qr_callbacks(data, validation_result)
+							
+							logger.warning(f"Invalid QR code detected: {data} - {validation_result.get('message', 'Unknown error')}")
+						continue
 					
-					# Validate QR code once and reuse the result
-					validation_result = self.validate_qr_with_database(data)
-					
-					# Check if this is a new QR code or enough time has passed since last detection
-					# (keeping time-based cooldown for the same QR code being detected multiple times rapidly)
+					# Valid QR code that hasn't been scanned before
+					# Check for duplicate prevention for local scanning (time-based cooldown)
 					should_process = (
 						data != self.last_qr_data or 
 						self.last_qr_time is None or
@@ -340,7 +604,17 @@ class CameraManager:
 						self.last_qr_data = data
 						self.last_qr_time = current_time
 						
-						# Mark QR code as scanned if duplicate prevention is enabled
+						# Store QR data and rect for message display
+						self.current_qr_data = data
+						self.current_qr_rect = obj.rect
+						
+						# Show "Valid QR Code!" message
+						self.display_message = "Valid QR Code!"
+						self.display_message_color = (0, 255, 0)  # Green
+						self.display_message_start_time = current_time
+						self.display_message_duration = 5.0
+						
+						# Mark QR code as scanned locally for duplicate prevention
 						if self.duplicate_prevention_enabled:
 							self.mark_qr_as_scanned(data)
 						
@@ -354,26 +628,15 @@ class CameraManager:
 						# Notify callbacks about new QR detection
 						self._notify_qr_callbacks(data, validation_result)
 						
-						if validation_result['valid']:
-							logger.info(f"Valid QR code detected: {data} - Order: {validation_result.get('order_number', 'N/A')}")
-						else:
-							logger.warning(f"Invalid QR code detected: {data} - {validation_result.get('message', 'Unknown error')}")
+						logger.info(f"Valid QR code detected: {data} - Order: {validation_result.get('order_number', 'N/A')}")
 
 					# Draw a bounding box around the QR code
 					points = obj.polygon
 					if len(points) >= 4:
-						# Use different colors based on validation
-						color = (0, 255, 0) if validation_result['valid'] else (0, 0, 255)  # Green for valid, red for invalid
-						
+						# Green color for valid QR codes
+						color = (0, 255, 0)
 						pts = [(point.x, point.y) for point in points]
 						cv2.polylines(frame, [cv2.convexHull(np.array(pts, dtype=np.int32))], isClosed=True, color=color, thickness=3)
-
-					# Display the decoded text with validation status
-					x, y, w, h = obj.rect
-					status_text = "Valid" if validation_result['valid'] else "Not Valid"
-					display_text = f"{data} - {status_text}"
-					text_color = (0, 255, 0) if validation_result['valid'] else (0, 0, 255)
-					cv2.putText(frame, display_text, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, text_color, 2)
 
 			except Exception as e:
 				logger.error(f"QR code scan error: {e}")

@@ -690,6 +690,93 @@ def get_scanned_qr_codes():
             'details': str(e)
         }), 500
 
+@app.route('/camera/scanning-status')
+def get_scanning_status():
+    """Get current QR scanning delay status"""
+    try:
+        status = camera.get_scanning_status()
+        return jsonify(status)
+    except Exception as e:
+        logger.error(f"Error getting scanning status: {str(e)}")
+        return jsonify({
+            'error': 'Failed to get scanning status',
+            'details': str(e)
+        }), 500
+
+@app.route('/camera/reset-cycle', methods=['POST'])
+def reset_scan_cycle():
+    """Reset the scanning cycle (countdown + scanning session)"""
+    try:
+        # Use the new method that works even when camera is running
+        success = camera.reset_scan_cycle_if_running()
+        status = camera.get_scanning_status()
+        
+        if success:
+            return jsonify({
+                'message': 'Scanning cycle reset successfully (camera was running)',
+                'status': status
+            })
+        else:
+            # If camera is not running, try regular reset
+            camera.reset_scan_cycle()
+            status = camera.get_scanning_status()
+            return jsonify({
+                'message': 'Scanning cycle reset successfully (camera was not running)',
+                'status': status
+            })
+    except Exception as e:
+        logger.error(f"Error resetting scan cycle: {str(e)}")
+        return jsonify({
+            'error': 'Failed to reset scanning cycle',
+            'details': str(e)
+        }), 500
+
+@app.route('/camera/start-session', methods=['POST'])
+def start_scanning_session_immediately():
+    """Start scanning session immediately, skipping countdown"""
+    try:
+        camera.start_scanning_session_immediately()
+        status = camera.get_scanning_status()
+        return jsonify({
+            'message': 'Scanning session started immediately',
+            'status': status
+        })
+    except Exception as e:
+        logger.error(f"Error starting scanning session: {str(e)}")
+        return jsonify({
+            'error': 'Failed to start scanning session immediately',
+            'details': str(e)
+        }), 500
+
+@app.route('/camera/session-start', methods=['POST'])
+def handle_session_start():
+    """Handle when a new session/page load occurs - reset scanning delay"""
+    try:
+        # Always reset the delay when a new session starts
+        if camera.running:
+            success = camera.reset_scan_delay_if_running()
+            status = camera.get_scanning_status()
+            return jsonify({
+                'message': 'New session started - scanning delay reset',
+                'camera_running': True,
+                'delay_reset': success,
+                'status': status
+            })
+        else:
+            # Camera is not running, just return status
+            return jsonify({
+                'message': 'New session started - camera not running',
+                'camera_running': False,
+                'delay_reset': False,
+                'status': {'enabled': False, 'time_remaining': 0}
+            })
+    except Exception as e:
+        logger.error(f"Error handling session start: {str(e)}")
+        return jsonify({
+            'error': 'Failed to handle session start',
+            'details': str(e)
+        }), 500
+
 @app.route('/api/validate-qr', methods=['POST'])
 def validate_qr():
     """Validate QR code by forwarding to main backend"""

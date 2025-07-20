@@ -112,6 +112,20 @@ def init_db():
         )
     ''')
     
+    # Create scanned_codes table to track verified scanned QR codes
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS scanned_codes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id INTEGER NOT NULL,
+            order_number TEXT NOT NULL,
+            isverified TEXT NOT NULL CHECK(isverified IN ('yes', 'no')),
+            scanned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            device TEXT DEFAULT 'raspberry_pi',
+            FOREIGN KEY (order_id) REFERENCES orders (id),
+            UNIQUE(order_id) -- Prevent duplicate entries for same order
+        )
+    ''')
+    
     conn.commit()
     conn.close()
 
@@ -649,6 +663,78 @@ def get_camera_stream_url():
             'details': str(e)
         }), 503
 
+@app.route('/api/camera/scanning-status')
+def get_scanning_status():
+    """Get current QR scanning delay status"""
+    try:
+        response = requests.get(f"{RASPBERRY_PI_URL}/camera/scanning-status")
+        if response.status_code == 200:
+            return jsonify(response.json())
+        else:
+            return jsonify({
+                'error': 'Failed to get scanning status',
+                'details': response.text
+            }), response.status_code
+    except requests.RequestException as e:
+        return jsonify({
+            'error': 'Failed to connect to camera service',
+            'details': str(e)
+        }), 503
+
+@app.route('/api/camera/reset-cycle', methods=['POST'])
+def reset_scan_cycle():
+    """Reset the scanning cycle (countdown + scanning session)"""
+    try:
+        response = requests.post(f"{RASPBERRY_PI_URL}/camera/reset-cycle")
+        if response.status_code == 200:
+            return jsonify(response.json())
+        else:
+            return jsonify({
+                'error': 'Failed to reset scanning cycle',
+                'details': response.text
+            }), response.status_code
+    except requests.RequestException as e:
+        return jsonify({
+            'error': 'Failed to connect to camera service',
+            'details': str(e)
+        }), 503
+
+@app.route('/api/camera/start-session', methods=['POST'])
+def start_scanning_session_immediately():
+    """Start scanning session immediately, skipping countdown"""
+    try:
+        response = requests.post(f"{RASPBERRY_PI_URL}/camera/start-session")
+        if response.status_code == 200:
+            return jsonify(response.json())
+        else:
+            return jsonify({
+                'error': 'Failed to start scanning session',
+                'details': response.text
+            }), response.status_code
+    except requests.RequestException as e:
+        return jsonify({
+            'error': 'Failed to connect to camera service',
+            'details': str(e)
+        }), 503
+
+@app.route('/api/camera/session-start', methods=['POST'])
+def handle_camera_session_start():
+    """Handle when a new session/page load occurs - reset scanning delay"""
+    try:
+        response = requests.post(f"{RASPBERRY_PI_URL}/camera/session-start")
+        if response.status_code == 200:
+            return jsonify(response.json())
+        else:
+            return jsonify({
+                'error': 'Failed to handle session start',
+                'details': response.text
+            }), response.status_code
+    except requests.RequestException as e:
+        return jsonify({
+            'error': 'Failed to connect to camera service',
+            'details': str(e)
+        }), 503
+
 @app.route('/api/system/status')
 def get_full_system_status():
     """Get status of all system components including camera"""
@@ -909,6 +995,63 @@ def get_all_package_information():
             'details': str(e)
         }), 500
 
+@app.route('/api/scanned-codes/<int:order_id>', methods=['DELETE'])
+def delete_scanned_code(order_id):
+    """Delete a scanned code entry to allow rescanning"""
+    try:
+        conn = sqlite3.connect('database.db')
+        c = conn.cursor()
+        
+        # Check if the scanned code exists
+        c.execute('SELECT * FROM scanned_codes WHERE order_id = ?', (order_id,))
+        scanned_code = c.fetchone()
+        
+        if not scanned_code:
+            conn.close()
+            return jsonify({'error': 'Scanned code not found'}), 404
+        
+        # Delete the scanned code
+        c.execute('DELETE FROM scanned_codes WHERE order_id = ?', (order_id,))
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            'message': 'Scanned code deleted successfully',
+            'order_id': order_id
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            'error': 'Failed to delete scanned code',
+            'details': str(e)
+        }), 500
+
+@app.route('/api/scanned-codes', methods=['GET'])
+def get_scanned_codes():
+    """Get all scanned codes from the database"""
+    try:
+        conn = sqlite3.connect('database.db')
+        conn.row_factory = dict_factory
+        c = conn.cursor()
+        
+        c.execute('''
+            SELECT sc.*, o.customer_name, o.product_name, o.amount 
+            FROM scanned_codes sc
+            LEFT JOIN orders o ON sc.order_id = o.id
+            ORDER BY sc.scanned_at DESC
+        ''')
+        scanned_codes = c.fetchall()
+        
+        conn.close()
+        
+        return jsonify(scanned_codes), 200
+        
+    except Exception as e:
+        return jsonify({
+            'error': 'Failed to get scanned codes',
+            'details': str(e)
+        }), 500
+
 @app.route('/api/validate-qr', methods=['POST'])
 def validate_qr_code():
     """Validate QR code against orders database"""
@@ -928,23 +1071,67 @@ def validate_qr_code():
         order = c.fetchone()
         
         if order:
-            # Also get package information if it exists
-            c.execute('SELECT * FROM package_information WHERE order_id = ?', (order['id'],))
-            package_info = c.fetchone()
+            # Check if this order is already scanned
+            c.execute('SELECT * FROM scanned_codes WHERE order_id = ? AND isverified = ?', (order['id'], 'yes'))
+            already_scanned = c.fetchone()
             
-            response_data = {
-                'valid': True,
-                'order_id': order['id'],
-                'order_number': order['order_number'],
-                'customer_name': order['customer_name'],
-                'product_name': order['product_name'],
-                'amount': order['amount'],
-                'date': order['date'],
-                'package_information': package_info
-            }
+            if already_scanned:
+                # Order already scanned
+                response_data = {
+                    'valid': True,
+                    'already_scanned': True,
+                    'order_id': order['id'],
+                    'order_number': order['order_number'],
+                    'customer_name': order['customer_name'],
+                    'product_name': order['product_name'],
+                    'amount': order['amount'],
+                    'date': order['date'],
+                    'message': 'Already scanned',
+                    'scanned_at': already_scanned['scanned_at']
+                }
+            else:
+                # Insert into scanned_codes table as verified
+                try:
+                    c.execute('''
+                        INSERT INTO scanned_codes (order_id, order_number, isverified, device)
+                        VALUES (?, ?, ?, ?)
+                    ''', (order['id'], order['order_number'], 'yes', 'raspberry_pi'))
+                    conn.commit()
+                    
+                    # Also get package information if it exists
+                    c.execute('SELECT * FROM package_information WHERE order_id = ?', (order['id'],))
+                    package_info = c.fetchone()
+                    
+                    response_data = {
+                        'valid': True,
+                        'already_scanned': False,
+                        'order_id': order['id'],
+                        'order_number': order['order_number'],
+                        'customer_name': order['customer_name'],
+                        'product_name': order['product_name'],
+                        'amount': order['amount'],
+                        'date': order['date'],
+                        'message': 'Valid - Successfully scanned',
+                        'package_information': package_info
+                    }
+                except sqlite3.IntegrityError:
+                    # Handle race condition where another scan might have inserted the same order
+                    response_data = {
+                        'valid': True,
+                        'already_scanned': True,
+                        'order_id': order['id'],
+                        'order_number': order['order_number'],
+                        'customer_name': order['customer_name'],
+                        'product_name': order['product_name'],
+                        'amount': order['amount'],
+                        'date': order['date'],
+                        'message': 'Already scanned'
+                    }
         else:
+            # Invalid QR code - order not found, don't insert anything
             response_data = {
                 'valid': False, 
+                'already_scanned': False,
                 'message': 'QR code not found in orders database'
             }
         
@@ -954,6 +1141,7 @@ def validate_qr_code():
     except Exception as e:
         return jsonify({
             'valid': False, 
+            'already_scanned': False,
             'message': f'Database error: {str(e)}'
         }), 500
 
