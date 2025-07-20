@@ -85,21 +85,46 @@ class MQTTListener:
         # Process specific MQTT topics for sensor data
         global mqtt_sensor_data
         try:
-            # Handle loadcell weight data
-            if topic.lower() == '/loadcell':
+            # Handle loadcell weight data (Step 3: Load Sensor gets weight)
+            # Support both /loadcell and esp32/loadcell/data topics
+            if topic.lower() in ['/loadcell', 'esp32/loadcell/data']:
                 try:
                     weight = float(message)
-                    mqtt_sensor_data['loadcell']['weight'] = weight
-                    mqtt_sensor_data['loadcell']['timestamp'] = datetime.now().isoformat()
-                    logger.info(f"📏 LOADCELL: Weight updated to {weight}")
                     
-                    # Store sensor data in database
-                    store_sensor_data_in_db()
+                    # Apply spam filtering if enabled
+                    if LOADCELL_SPAM_FILTER['enabled']:
+                        # Filter out spam messages - only process if weight is meaningful
+                        # and different from last reading
+                        min_weight = LOADCELL_SPAM_FILTER['min_weight_threshold']
+                        change_threshold = LOADCELL_SPAM_FILTER['weight_change_threshold']
+                        
+                        if (weight > min_weight and 
+                            (mqtt_sensor_data['loadcell']['weight'] is None or 
+                             abs(weight - (mqtt_sensor_data['loadcell']['weight'] or 0)) > change_threshold)):
+                            
+                            mqtt_sensor_data['loadcell']['weight'] = weight
+                            mqtt_sensor_data['loadcell']['timestamp'] = datetime.now().isoformat()
+                            logger.info(f"📏 STEP 3 - LOADCELL: Weight captured {weight}kg")
+                            
+                            # Store ONLY weight data in database (first entry)
+                            store_weight_data_in_db()
+                        else:
+                            # Suppress spam logging for zero or very small weight readings
+                            if weight <= min_weight:
+                                pass  # Don't log zero/near-zero readings
+                            else:
+                                logger.debug(f"📏 LOADCELL: Ignoring similar weight reading {weight}kg")
+                    else:
+                        # No filtering - process all weight readings
+                        mqtt_sensor_data['loadcell']['weight'] = weight
+                        mqtt_sensor_data['loadcell']['timestamp'] = datetime.now().isoformat()
+                        logger.info(f"📏 STEP 3 - LOADCELL: Weight captured {weight}kg")
+                        store_weight_data_in_db()
                     
                 except ValueError:
                     logger.warning(f"Invalid weight value received: {message}")
             
-            # Handle box dimensions data
+            # Handle box dimensions data (Step 5: Size Sensor gets dimensions after grabber moves box)
             elif topic.lower() == '/box/results':
                 try:
                     # Expecting format: "width,height,length"
@@ -110,41 +135,118 @@ class MQTTListener:
                         mqtt_sensor_data['box_dimensions']['height'] = height
                         mqtt_sensor_data['box_dimensions']['length'] = length
                         mqtt_sensor_data['box_dimensions']['timestamp'] = datetime.now().isoformat()
-                        logger.info(f"📦 BOX DIMENSIONS: W:{width}, H:{height}, L:{length}")
+                        logger.info(f"📦 STEP 5 - SIZE SENSOR: Dimensions captured W:{width}, H:{height}, L:{length}cm")
                         
-                        # Store sensor data in database
-                        store_sensor_data_in_db()
+                        # Determine package size category
+                        package_size = determine_package_size(width, height, length)
+                        logger.info(f"📏 PACKAGE SIZE DETERMINED: {package_size}")
+                        
+                        # Update existing weight record with dimensions (overwrite the weight-only entry)
+                        update_sensor_data_with_dimensions()
                         
                     else:
                         logger.warning(f"Invalid box dimensions format: {message}")
                 except ValueError:
                     logger.warning(f"Invalid box dimensions values: {message}")
+            # Handle motor status messages (Step 2: Object detection triggers loadcell)
+            elif topic.lower() == 'esp32/motor/status':
+                try:
+                    # Check for object detection message (updated pattern)
+                    if '📍 Object detected! Motor B paused' in message:
+                        logger.info(f"🚛 STEP 2 - MOTOR STATUS: Object detected, motor paused")
+                        
+                        # Send immediate loadcell request (no delay needed)
+                        def send_loadcell_request():
+                            try:
+                                logger.info("📤 Sending loadcell start request to ESP32...")
+                                
+                                # Send loadcell request via MQTT
+                                success = mqtt_listener.publish_message('esp32/loadcell/request', 'start')
+                                if success:
+                                    logger.info("✅ STEP 3 TRIGGER: Sent loadcell request (esp32/loadcell/request > start)")
+                                    
+                                    # Emit workflow progress via WebSocket
+                                    socketio.emit('workflow_progress', {
+                                        'step': 2.5,
+                                        'status': 'loadcell_requested',
+                                        'message': 'Object detected, loadcell reading requested',
+                                        'timestamp': datetime.now().isoformat()
+                                    })
+                                else:
+                                    logger.error("❌ Failed to send loadcell request")
+                                    
+                            except Exception as e:
+                                logger.error(f"❌ Error sending loadcell request: {e}")
+                        
+                        # Start request in background thread to not block MQTT processing
+                        request_thread = threading.Thread(target=send_loadcell_request, daemon=True)
+                        request_thread.start()
+                        
+                        # Emit immediate motor status via WebSocket
+                        socketio.emit('workflow_progress', {
+                            'step': 2,
+                            'status': 'object_detected',
+                            'message': 'Object detected! Motor paused, requesting weight measurement',
+                            'timestamp': datetime.now().isoformat()
+                        })
+                        
+                    else:
+                        logger.info(f"🚛 MOTOR STATUS: {message}")
+                        
+                except Exception as e:
+                    logger.error(f"Error processing motor status: {e}")
+                    
         except Exception as e:
             logger.error(f"Error processing MQTT sensor data: {e}")
         
-        # Log to file
-        try:
-            with open("mqtt_messages.log", "a", encoding='utf-8') as f:
-                f.write(f"[{timestamp}] {topic} > {message}\n")
-        except Exception as e:
-            logger.error(f"Failed to write MQTT log: {e}")
+        # Log to file (filter out spam messages)
+        should_log_to_file = True
+        
+        # Filter loadcell spam from file logging
+        if LOADCELL_SPAM_FILTER['enabled'] and topic.lower() in ['esp32/loadcell/data', '/loadcell']:
+            try:
+                weight_value = float(message)
+                if weight_value <= LOADCELL_SPAM_FILTER['min_weight_threshold']:
+                    should_log_to_file = False
+            except ValueError:
+                pass  # If not a number, log normally
+        
+        if should_log_to_file:
+            try:
+                with open("mqtt_messages.log", "a", encoding='utf-8') as f:
+                    f.write(f"[{timestamp}] {topic} > {message}\n")
+            except Exception as e:
+                logger.error(f"Failed to write MQTT log: {e}")
         
         # Emit MQTT message via WebSocket for real-time monitoring
-        mqtt_data = {
-            'topic': topic,
-            'message': message,
-            'timestamp': datetime.now().isoformat(),
-            'raw_timestamp': timestamp,
-            'sensor_data': mqtt_sensor_data.copy()  # Include current sensor data state
-        }
+        # Filter out spam messages for certain topics
+        should_emit_websocket = True
         
-        logger.info(f"Emitting MQTT message via WebSocket: {mqtt_data}")
+        # Filter loadcell spam (zero or very small readings)
+        if LOADCELL_SPAM_FILTER['enabled'] and topic.lower() in ['esp32/loadcell/data', '/loadcell']:
+            try:
+                weight_value = float(message)
+                if weight_value <= LOADCELL_SPAM_FILTER['min_weight_threshold']:
+                    should_emit_websocket = False
+            except ValueError:
+                pass  # If not a number, emit normally
         
-        # Emit to all connected clients
-        socketio.emit('mqtt_message', mqtt_data)
-        
-        # Also broadcast to all namespaces
-        socketio.emit('mqtt_message', mqtt_data, namespace='/')
+        if should_emit_websocket:
+            mqtt_data = {
+                'topic': topic,
+                'message': message,
+                'timestamp': datetime.now().isoformat(),
+                'raw_timestamp': timestamp,
+                'sensor_data': mqtt_sensor_data.copy()  # Include current sensor data state
+            }
+            
+            logger.info(f"Emitting MQTT message via WebSocket: {mqtt_data}")
+            
+            # Emit to all connected clients
+            socketio.emit('mqtt_message', mqtt_data)
+            
+            # Also broadcast to all namespaces
+            socketio.emit('mqtt_message', mqtt_data, namespace='/')
 
     def on_disconnect(self, client, userdata, rc):
         self.is_connected = False
@@ -211,6 +313,13 @@ class MQTTListener:
 
 # Initialize MQTT listener
 mqtt_listener = MQTTListener()
+
+# Spam filtering configuration
+LOADCELL_SPAM_FILTER = {
+    'min_weight_threshold': 0.1,  # Minimum weight to consider (kg)
+    'weight_change_threshold': 0.05,  # Minimum change to log new reading (kg)
+    'enabled': True  # Enable/disable spam filtering
+}
 
 # Temporary storage for MQTT sensor data
 mqtt_sensor_data = {
@@ -337,43 +446,138 @@ def start_qr_monitoring():
     monitor_thread.start()
     logger.info("✅ QR scan monitoring started in background")
 
-def store_sensor_data_in_db():
-    """Store current sensor data in database"""
+def determine_package_size(width, height, length):
+    """Determine package size category based on dimensions"""
+    try:
+        # Calculate volume in cubic centimeters
+        volume = width * height * length
+        
+        # Calculate max dimension
+        max_dimension = max(width, height, length)
+        
+        # Size classification logic (you can adjust these thresholds)
+        if volume <= 1000 or max_dimension <= 15:  # 1000 cm³ or max 15cm
+            return "Small"
+        elif volume <= 8000 or max_dimension <= 30:  # 8000 cm³ or max 30cm
+            return "Medium"
+        else:
+            return "Large"
+            
+    except Exception as e:
+        logger.error(f"Error determining package size: {e}")
+        return "Unknown"
+
+def store_weight_data_in_db():
+    """Store ONLY weight data in database (Step 3: Load Sensor captures weight)"""
     global sensor_data_loaded
     
     try:
-        # Send sensor data to main backend
+        # Send only weight data to main backend
         backend_url = 'http://192.168.100.61:5000/api/sensor-data'
         sensor_data = {
             'weight': mqtt_sensor_data['loadcell']['weight'],
-            'width': mqtt_sensor_data['box_dimensions']['width'],
-            'height': mqtt_sensor_data['box_dimensions']['height'],
-            'length': mqtt_sensor_data['box_dimensions']['length'],
+            'width': None,  # Dimensions not captured yet
+            'height': None,
+            'length': None,
+            'loadcell_timestamp': mqtt_sensor_data['loadcell']['timestamp'],
+            'box_dimensions_timestamp': None
+        }
+        
+        # Only send if we have weight data
+        if sensor_data['weight'] is not None:
+            response = requests.post(backend_url, json=sensor_data, timeout=5)
+            if response.status_code == 200:
+                logger.info("✅ STEP 3 COMPLETE: Weight data stored in database")
+                sensor_data_loaded = True  # Mark that we have sensor data loaded
+                
+                weight = sensor_data['weight']
+                logger.info(f"📊 Weight captured: {weight}kg - Ready for grabber to move package")
+                
+                # Emit progress update via WebSocket
+                socketio.emit('workflow_progress', {
+                    'step': 3,
+                    'status': 'completed',
+                    'message': f'Weight captured: {weight}kg',
+                    'timestamp': datetime.now().isoformat()
+                })
+            else:
+                logger.warning(f"⚠️ Failed to store weight data: {response.status_code}")
+        
+    except requests.RequestException as e:
+        logger.error(f"❌ Error storing weight data in database: {e}")
+    except Exception as e:
+        logger.error(f"❌ Unexpected error storing weight data: {e}")
+
+def update_sensor_data_with_dimensions():
+    """Update existing weight record with dimensions (Step 5: Size Sensor overrides with complete data)"""
+    global sensor_data_loaded
+    
+    try:
+        # Send complete sensor data to main backend (this will overwrite the weight-only entry)
+        backend_url = 'http://192.168.100.61:5000/api/sensor-data'
+        
+        # Determine package size
+        width = mqtt_sensor_data['box_dimensions']['width']
+        height = mqtt_sensor_data['box_dimensions']['height'] 
+        length = mqtt_sensor_data['box_dimensions']['length']
+        package_size = determine_package_size(width, height, length)
+        
+        sensor_data = {
+            'weight': mqtt_sensor_data['loadcell']['weight'],
+            'width': width,
+            'height': height,
+            'length': length,
+            'package_size': package_size,
             'loadcell_timestamp': mqtt_sensor_data['loadcell']['timestamp'],
             'box_dimensions_timestamp': mqtt_sensor_data['box_dimensions']['timestamp']
         }
         
-        # Only send if we have some data
-        if any(value is not None for value in [sensor_data['weight'], sensor_data['width'], 
-                                               sensor_data['height'], sensor_data['length']]):
-            response = requests.post(backend_url, json=sensor_data, timeout=5)
-            if response.status_code == 200:
-                logger.info("✅ Sensor data stored in database successfully")
-                sensor_data_loaded = True  # Mark that we have sensor data loaded
-                
-                # Log current sensor status
-                weight = sensor_data['weight'] or 'N/A'
-                width = sensor_data['width'] or 'N/A'
-                height = sensor_data['height'] or 'N/A'
-                length = sensor_data['length'] or 'N/A'
-                logger.info(f"📊 Current sensor data: Weight={weight}kg, Dimensions={width}x{height}x{length}cm")
-            else:
-                logger.warning(f"⚠️ Failed to store sensor data: {response.status_code}")
+        # Send complete data (this overwrites the previous weight-only entry)
+        response = requests.post(backend_url, json=sensor_data, timeout=5)
+        if response.status_code == 200:
+            logger.info("✅ STEP 5 COMPLETE: Package data updated with dimensions")
+            
+            # Log complete package information
+            weight = sensor_data['weight'] or 'N/A'
+            logger.info(f"📊 COMPLETE PACKAGE DATA: Weight={weight}kg, Dimensions={width}x{height}x{length}cm, Size={package_size}")
+            
+            # Emit workflow completion via WebSocket
+            socketio.emit('workflow_progress', {
+                'step': 5,
+                'status': 'completed',
+                'message': f'Package complete: {weight}kg, {width}x{height}x{length}cm ({package_size})',
+                'package_data': sensor_data,
+                'timestamp': datetime.now().isoformat()
+            })
+            
+        else:
+            logger.warning(f"⚠️ Failed to update sensor data with dimensions: {response.status_code}")
         
     except requests.RequestException as e:
-        logger.error(f"❌ Error storing sensor data in database: {e}")
+        logger.error(f"❌ Error updating sensor data with dimensions: {e}")
     except Exception as e:
-        logger.error(f"❌ Unexpected error storing sensor data: {e}")
+        logger.error(f"❌ Unexpected error updating sensor data: {e}")
+
+def store_sensor_data_in_db():
+    """Legacy function - now replaced by step-specific functions"""
+    logger.warning("⚠️ Legacy store_sensor_data_in_db() called - use step-specific functions instead")
+    
+    # For backward compatibility, determine which step we're in
+    has_weight = mqtt_sensor_data['loadcell']['weight'] is not None
+    has_dimensions = all([
+        mqtt_sensor_data['box_dimensions']['width'] is not None,
+        mqtt_sensor_data['box_dimensions']['height'] is not None,
+        mqtt_sensor_data['box_dimensions']['length'] is not None
+    ])
+    
+    if has_weight and not has_dimensions:
+        # Step 3: Only weight available
+        store_weight_data_in_db()
+    elif has_weight and has_dimensions:
+        # Step 5: Both weight and dimensions available
+        update_sensor_data_with_dimensions()
+    else:
+        logger.warning("⚠️ Incomplete sensor data - cannot determine workflow step")
 
 @app.route('/api/clear-sensor-data', methods=['POST'])
 def clear_sensor_data():
@@ -598,12 +802,17 @@ def restart_mqtt():
 def start_motor():
     """Start motor by sending MQTT command to ESP32"""
     try:
+        logger.info("🚀 Start motor request received")
+        
         # Check if MQTT is connected
         if not mqtt_listener.is_connected:
+            logger.warning("❌ MQTT not connected - cannot start motor")
             return jsonify({
                 'error': 'MQTT not connected',
                 'message': 'Cannot start motor - MQTT broker not connected'
             }), 503
+        
+        logger.info("✅ MQTT is connected, sending start command...")
         
         # Publish start command to ESP32
         success = mqtt_listener.publish_message('esp32/motor/request', 'start')
@@ -624,6 +833,7 @@ def start_motor():
                 'timestamp': datetime.now().isoformat()
             })
         else:
+            logger.error("❌ Failed to publish start command to MQTT")
             return jsonify({
                 'error': 'Failed to send MQTT command',
                 'message': 'Could not publish start command to ESP32'
@@ -640,12 +850,17 @@ def start_motor():
 def stop_motor():
     """Stop motor by sending MQTT command to ESP32"""
     try:
+        logger.info("🛑 Stop motor request received")
+        
         # Check if MQTT is connected
         if not mqtt_listener.is_connected:
+            logger.warning("❌ MQTT not connected - cannot stop motor")
             return jsonify({
                 'error': 'MQTT not connected',
                 'message': 'Cannot stop motor - MQTT broker not connected'
             }), 503
+        
+        logger.info("✅ MQTT is connected, sending stop command...")
         
         # Publish stop command to ESP32
         success = mqtt_listener.publish_message('esp32/motor/request', 'stop')
@@ -666,6 +881,7 @@ def stop_motor():
                 'timestamp': datetime.now().isoformat()
             })
         else:
+            logger.error("❌ Failed to publish stop command to MQTT")
             return jsonify({
                 'error': 'Failed to send MQTT command',
                 'message': 'Could not publish stop command to ESP32'
@@ -678,7 +894,83 @@ def stop_motor():
             'details': str(e)
         }), 500
 
-@app.after_request
+@app.route('/api/motor-status', methods=['GET'])
+def get_motor_status():
+    """Get current motor control status and MQTT connectivity"""
+    try:
+        mqtt_status = mqtt_listener.get_status()
+        
+        return jsonify({
+            'motor_control': {
+                'mqtt_connected': mqtt_listener.is_connected,
+                'mqtt_broker': mqtt_listener.broker_host,
+                'mqtt_port': mqtt_listener.broker_port,
+                'can_send_commands': mqtt_listener.is_connected
+            },
+            'mqtt_details': mqtt_status,
+            'endpoints': {
+                'start_motor': '/api/start-motor',
+                'stop_motor': '/api/stop-motor'
+            },
+            'mqtt_topics': {
+                'motor_request': 'esp32/motor/request',
+                'motor_status': 'esp32/motor/status'
+            },
+            'timestamp': datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting motor status: {str(e)}")
+        return jsonify({
+            'error': 'Failed to get motor status',
+            'details': str(e)
+        }), 500
+
+@app.route('/api/spam-filter', methods=['GET'])
+def get_spam_filter_config():
+    """Get current spam filter configuration"""
+    return jsonify({
+        'spam_filter': LOADCELL_SPAM_FILTER,
+        'description': {
+            'min_weight_threshold': 'Minimum weight to consider (kg)',
+            'weight_change_threshold': 'Minimum change to log new reading (kg)',
+            'enabled': 'Enable/disable spam filtering'
+        },
+        'timestamp': datetime.now().isoformat()
+    })
+
+@app.route('/api/spam-filter', methods=['POST'])
+def update_spam_filter_config():
+    """Update spam filter configuration"""
+    try:
+        global LOADCELL_SPAM_FILTER
+        data = request.get_json()
+        
+        # Update configuration with provided values
+        if 'min_weight_threshold' in data:
+            LOADCELL_SPAM_FILTER['min_weight_threshold'] = float(data['min_weight_threshold'])
+        
+        if 'weight_change_threshold' in data:
+            LOADCELL_SPAM_FILTER['weight_change_threshold'] = float(data['weight_change_threshold'])
+        
+        if 'enabled' in data:
+            LOADCELL_SPAM_FILTER['enabled'] = bool(data['enabled'])
+        
+        logger.info(f"🔧 Spam filter configuration updated: {LOADCELL_SPAM_FILTER}")
+        
+        return jsonify({
+            'success': True,
+            'message': 'Spam filter configuration updated',
+            'new_config': LOADCELL_SPAM_FILTER,
+            'timestamp': datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error updating spam filter config: {str(e)}")
+        return jsonify({
+            'error': 'Failed to update spam filter configuration',
+            'details': str(e)
+        }), 500
 def after_request(response):
     """Ensure CORS headers are set"""
     response.headers.add('Access-Control-Allow-Origin', '*')

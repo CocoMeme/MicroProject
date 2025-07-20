@@ -134,11 +134,22 @@ def init_db():
             width REAL,
             height REAL,
             length REAL,
+            package_size TEXT,
             loadcell_timestamp TEXT,
             box_dimensions_timestamp TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    
+    # Add package_size column if it doesn't exist (migration)
+    try:
+        c.execute("PRAGMA table_info(loaded_sensor_data)")
+        columns = [column[1] for column in c.fetchall()]
+        if 'package_size' not in columns:
+            c.execute("ALTER TABLE loaded_sensor_data ADD COLUMN package_size TEXT")
+            print("✅ Added package_size column to loaded_sensor_data table")
+    except Exception as e:
+        print(f"Note: Could not add package_size column (may already exist): {e}")
     
     conn.commit()
     conn.close()
@@ -1317,19 +1328,20 @@ def store_sensor_data():
         conn = sqlite3.connect('database.db')
         c = conn.cursor()
         
-        # Clear any existing sensor data first
+        # Clear any existing sensor data first (overwrite behavior)
         c.execute('DELETE FROM loaded_sensor_data')
         
         # Insert new sensor data
         c.execute('''
             INSERT INTO loaded_sensor_data 
-            (weight, width, height, length, loadcell_timestamp, box_dimensions_timestamp)
-            VALUES (?, ?, ?, ?, ?, ?)
+            (weight, width, height, length, package_size, loadcell_timestamp, box_dimensions_timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         ''', (
             data.get('weight'),
             data.get('width'),
             data.get('height'),
             data.get('length'),
+            data.get('package_size'),
             data.get('loadcell_timestamp'),
             data.get('box_dimensions_timestamp')
         ))
@@ -1337,9 +1349,26 @@ def store_sensor_data():
         conn.commit()
         conn.close()
         
+        # Log the storage operation
+        weight = data.get('weight', 'N/A')
+        width = data.get('width', 'N/A') 
+        height = data.get('height', 'N/A')
+        length = data.get('length', 'N/A')
+        package_size = data.get('package_size', 'N/A')
+        
+        if data.get('width') is None:
+            print(f"📊 STEP 3: Weight-only data stored: {weight}kg")
+        else:
+            print(f"📊 STEP 5: Complete package data stored: {weight}kg, {width}x{height}x{length}cm ({package_size})")
+        
         return jsonify({
             'message': 'Sensor data stored successfully',
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.now().isoformat(),
+            'data': {
+                'weight': data.get('weight'),
+                'dimensions': f"{width}x{height}x{length}cm" if data.get('width') else None,
+                'package_size': package_size
+            }
         })
         
     except Exception as e:
@@ -1394,6 +1423,68 @@ def clear_sensor_data():
         print(f"Error clearing sensor data: {e}")
         return jsonify({
             'error': 'Failed to clear sensor data',
+            'details': str(e)
+        }), 500
+
+@app.route('/api/workflow-status', methods=['GET'])
+def get_workflow_status():
+    """Get current workflow status based on sensor data"""
+    try:
+        conn = sqlite3.connect('database.db')
+        conn.row_factory = dict_factory
+        c = conn.cursor()
+        
+        c.execute('SELECT * FROM loaded_sensor_data ORDER BY created_at DESC LIMIT 1')
+        sensor_data = c.fetchone()
+        
+        conn.close()
+        
+        if not sensor_data:
+            return jsonify({
+                'step': 0,
+                'status': 'waiting',
+                'message': 'Waiting for QR scan to start workflow',
+                'timestamp': datetime.now().isoformat()
+            })
+        
+        # Determine workflow step based on available data
+        has_weight = sensor_data.get('weight') is not None
+        has_dimensions = all([
+            sensor_data.get('width') is not None,
+            sensor_data.get('height') is not None,
+            sensor_data.get('length') is not None
+        ])
+        
+        if has_weight and not has_dimensions:
+            return jsonify({
+                'step': 3,
+                'status': 'weight_captured',
+                'message': f"Weight captured: {sensor_data['weight']}kg. Ready for grabber to move package.",
+                'data': sensor_data,
+                'timestamp': datetime.now().isoformat()
+            })
+        elif has_weight and has_dimensions:
+            package_size = sensor_data.get('package_size', 'Unknown')
+            return jsonify({
+                'step': 5,
+                'status': 'complete',
+                'message': f"Package complete: {sensor_data['weight']}kg, {sensor_data['width']}x{sensor_data['height']}x{sensor_data['length']}cm ({package_size})",
+                'data': sensor_data,
+                'timestamp': datetime.now().isoformat()
+            })
+        else:
+            return jsonify({
+                'step': 1,
+                'status': 'incomplete',
+                'message': 'Sensor data incomplete',
+                'data': sensor_data,
+                'timestamp': datetime.now().isoformat()
+            })
+        
+    except Exception as e:
+        print(f"Error getting workflow status: {e}")
+        return jsonify({
+            'error': 'Failed to get workflow status',
             'details': str(e)
         }), 500
 
