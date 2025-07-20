@@ -784,7 +784,7 @@ def get_full_system_status():
 
 @app.route('/api/system/start', methods=['POST'])
 def start_system():
-    """Start the box measurement system via Raspberry Pi"""
+    """Start the motor system via Raspberry Pi"""
     try:
         # Check if Raspberry Pi is reachable
         health_response = requests.get(f"{RASPBERRY_PI_URL}/", timeout=5)
@@ -795,34 +795,93 @@ def start_system():
             }), 503
         
         # Send start command to Raspberry Pi
-        start_response = requests.post(f"{RASPBERRY_PI_URL}/api/start-box-measurement", timeout=10)
+        start_response = requests.post(f"{RASPBERRY_PI_URL}/api/start-motor", timeout=10)
         
         if start_response.ok:
             response_data = start_response.json()
             
             # Log the system start event
-            print(f"🚀 System started: {response_data.get('message', 'Box measurement initiated')}")
+            print(f"🚀 Motor system started: {response_data.get('message', 'Motor initiated')}")
             
             # Emit WebSocket notification to connected clients
             socketio.emit('system_started', {
-                'message': 'Box measurement system started',
+                'message': 'Motor system started',
                 'timestamp': datetime.now().isoformat(),
                 'initiated_from': 'admin_dashboard'
             })
             
             return jsonify({
                 'success': True,
-                'message': 'System started successfully',
-                'details': response_data.get('message', 'Box measurement initiated'),
+                'message': 'Motor system started successfully',
+                'details': response_data.get('message', 'Motor initiated'),
                 'timestamp': datetime.now().isoformat()
             })
         else:
             error_data = start_response.json() if start_response.headers.get('content-type', '').startswith('application/json') else {}
             return jsonify({
-                'error': 'Failed to start system',
+                'error': 'Failed to start motor system',
                 'message': error_data.get('message', 'Raspberry Pi returned an error'),
                 'details': error_data.get('details', f'HTTP {start_response.status_code}')
             }), start_response.status_code
+            
+    except requests.Timeout:
+        return jsonify({
+            'error': 'Request timeout',
+            'message': 'Raspberry Pi did not respond in time'
+        }), 504
+    except requests.RequestException as e:
+        return jsonify({
+            'error': 'Communication error',
+            'message': 'Failed to communicate with Raspberry Pi',
+            'details': str(e)
+        }), 503
+    except Exception as e:
+        return jsonify({
+            'error': 'Internal server error',
+            'details': str(e)
+        }), 500
+
+@app.route('/api/system/stop', methods=['POST'])
+def stop_system():
+    """Stop the motor system via Raspberry Pi"""
+    try:
+        # Check if Raspberry Pi is reachable
+        health_response = requests.get(f"{RASPBERRY_PI_URL}/", timeout=5)
+        if not health_response.ok:
+            return jsonify({
+                'error': 'Raspberry Pi unreachable',
+                'message': 'Cannot connect to Raspberry Pi server'
+            }), 503
+        
+        # Send stop command to Raspberry Pi
+        stop_response = requests.post(f"{RASPBERRY_PI_URL}/api/stop-motor", timeout=10)
+        
+        if stop_response.ok:
+            response_data = stop_response.json()
+            
+            # Log the system stop event
+            print(f"🛑 Motor system stopped: {response_data.get('message', 'Motor stopped')}")
+            
+            # Emit WebSocket notification to connected clients
+            socketio.emit('system_stopped', {
+                'message': 'Motor system stopped',
+                'timestamp': datetime.now().isoformat(),
+                'initiated_from': 'admin_dashboard'
+            })
+            
+            return jsonify({
+                'success': True,
+                'message': 'Motor system stopped successfully',
+                'details': response_data.get('message', 'Motor stopped'),
+                'timestamp': datetime.now().isoformat()
+            })
+        else:
+            error_data = stop_response.json() if stop_response.headers.get('content-type', '').startswith('application/json') else {}
+            return jsonify({
+                'error': 'Failed to stop motor system',
+                'message': error_data.get('message', 'Raspberry Pi returned an error'),
+                'details': error_data.get('details', f'HTTP {stop_response.status_code}')
+            }), stop_response.status_code
             
     except requests.Timeout:
         return jsonify({

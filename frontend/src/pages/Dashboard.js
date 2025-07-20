@@ -34,6 +34,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [startingSystem, setStartingSystem] = useState(false);
+  const [stoppingSystem, setStoppingSystem] = useState(false);
 
   // Fetch Raspberry Pi status
   const fetchRaspiStatus = async () => {
@@ -56,7 +57,7 @@ export default function Dashboard() {
     }
   };
 
-  // Start the box measurement system
+  // Start the motor system
   const startSystem = async () => {
     try {
       setStartingSystem(true);
@@ -70,17 +71,45 @@ export default function Dashboard() {
       const data = await response.json();
 
       if (response.ok) {
-        console.log('✅ System started successfully:', data);
-        alert(`System started successfully!\n${data.message}`);
+        console.log('✅ Motor system started successfully:', data);
+        alert(`Motor system started successfully!\n${data.message}`);
       } else {
-        console.error('❌ Failed to start system:', data);
-        alert(`Failed to start system:\n${data.message || data.error}`);
+        console.error('❌ Failed to start motor system:', data);
+        alert(`Failed to start motor system:\n${data.message || data.error}`);
       }
     } catch (error) {
-      console.error('❌ Error starting system:', error);
-      alert(`Error starting system:\n${error.message}`);
+      console.error('❌ Error starting motor system:', error);
+      alert(`Error starting motor system:\n${error.message}`);
     } finally {
       setStartingSystem(false);
+    }
+  };
+
+  // Stop the motor system
+  const stopSystem = async () => {
+    try {
+      setStoppingSystem(true);
+      const response = await fetch(`${process.env.REACT_APP_API_ENDPOINT || 'http://192.168.100.61:5000/api'}/system/stop`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        console.log('✅ Motor system stopped successfully:', data);
+        alert(`Motor system stopped successfully!\n${data.message}`);
+      } else {
+        console.error('❌ Failed to stop motor system:', data);
+        alert(`Failed to stop motor system:\n${data.message || data.error}`);
+      }
+    } catch (error) {
+      console.error('❌ Error stopping motor system:', error);
+      alert(`Error stopping motor system:\n${error.message}`);
+    } finally {
+      setStoppingSystem(false);
     }
   };
 
@@ -133,7 +162,9 @@ export default function Dashboard() {
       label: 'Stop System', 
       icon: <StopIcon />, 
       color: 'error',
-      variant: 'contained'
+      variant: 'contained',
+      action: stopSystem,
+      loading: stoppingSystem
     },
     { 
       label: 'Refresh Data', 
@@ -254,7 +285,12 @@ export default function Dashboard() {
                     }
                   }}
                 >
-                  {button.loading ? (button.label === 'Start System' ? 'Starting...' : button.label) : button.label}
+                  {button.loading ? 
+                    (button.label === 'Start System' ? 'Starting...' : 
+                     button.label === 'Stop System' ? 'Stopping...' : 
+                     button.label) : 
+                    button.label
+                  }
                 </Button>
               ))}
             </Box>

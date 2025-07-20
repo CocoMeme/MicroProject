@@ -594,33 +594,33 @@ def restart_mqtt():
             'details': str(e)
         }), 500
 
-@app.route('/api/start-box-measurement', methods=['POST'])
-def start_box_measurement():
-    """Start box measurement by sending MQTT command to ESP32"""
+@app.route('/api/start-motor', methods=['POST'])
+def start_motor():
+    """Start motor by sending MQTT command to ESP32"""
     try:
         # Check if MQTT is connected
         if not mqtt_listener.is_connected:
             return jsonify({
                 'error': 'MQTT not connected',
-                'message': 'Cannot start box measurement - MQTT broker not connected'
+                'message': 'Cannot start motor - MQTT broker not connected'
             }), 503
         
         # Publish start command to ESP32
-        success = mqtt_listener.publish_message('esp32/box/request', 'start')
+        success = mqtt_listener.publish_message('esp32/motor/request', 'start')
         
         if success:
-            logger.info("🚀 Box measurement started via MQTT command")
+            logger.info("🚀 Motor started via MQTT command")
             # Emit WebSocket notification
             socketio.emit('system_command', {
-                'command': 'start_box_measurement',
+                'command': 'start_motor',
                 'status': 'success',
-                'message': 'Box measurement started',
+                'message': 'Motor started',
                 'timestamp': datetime.now().isoformat()
             })
             
             return jsonify({
                 'success': True,
-                'message': 'Box measurement started successfully',
+                'message': 'Motor started successfully',
                 'timestamp': datetime.now().isoformat()
             })
         else:
@@ -630,9 +630,51 @@ def start_box_measurement():
             }), 500
             
     except Exception as e:
-        logger.error(f"Error starting box measurement: {str(e)}")
+        logger.error(f"Error starting motor: {str(e)}")
         return jsonify({
-            'error': 'Failed to start box measurement',
+            'error': 'Failed to start motor',
+            'details': str(e)
+        }), 500
+
+@app.route('/api/stop-motor', methods=['POST'])
+def stop_motor():
+    """Stop motor by sending MQTT command to ESP32"""
+    try:
+        # Check if MQTT is connected
+        if not mqtt_listener.is_connected:
+            return jsonify({
+                'error': 'MQTT not connected',
+                'message': 'Cannot stop motor - MQTT broker not connected'
+            }), 503
+        
+        # Publish stop command to ESP32
+        success = mqtt_listener.publish_message('esp32/motor/request', 'stop')
+        
+        if success:
+            logger.info("🛑 Motor stopped via MQTT command")
+            # Emit WebSocket notification
+            socketio.emit('system_command', {
+                'command': 'stop_motor',
+                'status': 'success',
+                'message': 'Motor stopped',
+                'timestamp': datetime.now().isoformat()
+            })
+            
+            return jsonify({
+                'success': True,
+                'message': 'Motor stopped successfully',
+                'timestamp': datetime.now().isoformat()
+            })
+        else:
+            return jsonify({
+                'error': 'Failed to send MQTT command',
+                'message': 'Could not publish stop command to ESP32'
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Error stopping motor: {str(e)}")
+        return jsonify({
+            'error': 'Failed to stop motor',
             'details': str(e)
         }), 500
 
