@@ -9,7 +9,19 @@ import os
 import sqlite3
 from dotenv import load_dotenv
 import threading
+import logging
 from products_data import products_data
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('app.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -31,7 +43,7 @@ def init_db():
     
     # If status column exists, we need to migrate the table
     if 'status' in columns:
-        print("Migrating orders table to remove status column...")
+        logger.info("Migrating orders table to remove status column...")
         
         # Create backup of existing data
         c.execute("SELECT * FROM orders")
@@ -65,7 +77,7 @@ def init_db():
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', order[:10])  # Take first 10 columns (excluding status which was the last)
         
-        print("Migration completed successfully!")
+        logger.info("Migration completed successfully!")
     else:
         # Create table if it doesn't exist
         c.execute('''
@@ -147,9 +159,9 @@ def init_db():
         columns = [column[1] for column in c.fetchall()]
         if 'package_size' not in columns:
             c.execute("ALTER TABLE loaded_sensor_data ADD COLUMN package_size TEXT")
-            print("✅ Added package_size column to loaded_sensor_data table")
+            logger.debug("Added package_size column to loaded_sensor_data table")
     except Exception as e:
-        print(f"Note: Could not add package_size column (may already exist): {e}")
+        logger.debug(f"Could not add package_size column (may already exist): {e}")
     
     conn.commit()
     conn.close()
@@ -165,7 +177,7 @@ def migrate_database():
         columns = [column[1] for column in c.fetchall()]
         
         if 'email' in columns:
-            print("Removing email column from orders table...")
+            logger.info("Removing email column from orders table...")
             
             # Create new table without email column
             c.execute('''
@@ -201,7 +213,7 @@ def migrate_database():
             
         conn.close()
     except Exception as e:
-        print(f"Database migration failed: {e}")
+        logger.error(f"Database migration failed: {e}")
 
 # Initialize database
 init_db()
@@ -404,7 +416,7 @@ def print_qr_code():
         
         for attempt in range(max_retries):
             try:
-                print(f"Attempting to print QR code (attempt {attempt + 1}/{max_retries})")
+                logger.info(f"Attempting to print QR code (attempt {attempt + 1}/{max_retries})")
                 response = requests.post(
                     f"{RASPBERRY_PI_URL}/print-qr",
                     json=printer_data,
@@ -434,7 +446,7 @@ def print_qr_code():
                             'status_code': response.status_code
                         }), response.status_code
                     else:
-                        print(f"Print attempt failed with status {response.status_code}, retrying...")
+                        logger.warning(f"Print attempt failed with status {response.status_code}, retrying...")
                         time.sleep(retry_delay)
 
             except requests.exceptions.ConnectTimeout:
@@ -445,7 +457,7 @@ def print_qr_code():
                         'details': error_msg
                     }), 504
                 else:
-                    print(f"Connection timeout (attempt {attempt + 1}), retrying...")
+                    logger.warning(f"Connection timeout (attempt {attempt + 1}), retrying...")
                     time.sleep(retry_delay)
                     
             except requests.exceptions.ConnectionError:
@@ -456,7 +468,7 @@ def print_qr_code():
                         'details': 'Please check if the Raspberry Pi printer service is running at ' + RASPBERRY_PI_URL
                     }), 503
                 else:
-                    print(f"Connection error (attempt {attempt + 1}), retrying...")
+                    logger.warning(f"Connection error (attempt {attempt + 1}), retrying...")
                     time.sleep(retry_delay)
                     
             except requests.RequestException as e:
@@ -467,7 +479,7 @@ def print_qr_code():
                         'details': error_msg
                     }), 500
                 else:
-                    print(f"Request error (attempt {attempt + 1}): {error_msg}, retrying...")
+                    logger.warning(f"Request error (attempt {attempt + 1}): {error_msg}, retrying...")
                     time.sleep(retry_delay)
 
     except Exception as e:
@@ -812,7 +824,7 @@ def start_system():
             response_data = start_response.json()
             
             # Log the system start event
-            print(f"🚀 Motor system started: {response_data.get('message', 'Motor initiated')}")
+            logger.info(f"Motor system started: {response_data.get('message', 'Motor initiated')}")
             
             # Emit WebSocket notification to connected clients
             socketio.emit('system_started', {
@@ -871,7 +883,7 @@ def stop_system():
             response_data = stop_response.json()
             
             # Log the system stop event
-            print(f"🛑 Motor system stopped: {response_data.get('message', 'Motor stopped')}")
+            logger.info(f"Motor system stopped: {response_data.get('message', 'Motor stopped')}")
             
             # Emit WebSocket notification to connected clients
             socketio.emit('system_stopped', {
@@ -914,12 +926,12 @@ def stop_system():
 # WebSocket event handlers
 @socketio.on('connect')
 def handle_connect():
-    print('Client connected')
+    logger.info('WebSocket client connected')
     emit('status', {'message': 'Connected to server'})
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    print('Client disconnected')
+    logger.info('WebSocket client disconnected')
 
 @socketio.on('start_camera_stream')
 def handle_start_camera(data=None):
@@ -978,7 +990,7 @@ def handle_get_system_status(data=None):
 @socketio.on('test_message')
 def handle_test_message(data=None):
     """Handle test messages from clients"""
-    print(f'Received test message: {data}')
+    logger.debug(f'Received test message: {data}')
     emit('test_response', {
         'message': f'Server received: {data.get("message", "No message") if data else "No data"}',
         'timestamp': datetime.now().isoformat()
@@ -1004,7 +1016,7 @@ def qr_polling_task():
             # If we can't connect to camera, stop polling
             break
         except Exception as e:
-            print(f"Error in QR polling: {e}")
+            logger.error(f"Error in QR polling: {e}")
             break
 
 @app.route('/api/package-information', methods=['POST'])
@@ -1357,9 +1369,9 @@ def store_sensor_data():
         package_size = data.get('package_size', 'N/A')
         
         if data.get('width') is None:
-            print(f"📊 STEP 3: Weight-only data stored: {weight}kg")
+            logger.info(f"STEP 3: Weight-only data stored: {weight}kg")
         else:
-            print(f"📊 STEP 5: Complete package data stored: {weight}kg, {width}x{height}x{length}cm ({package_size})")
+            logger.info(f"STEP 5: Complete package data stored: {weight}kg, {width}x{height}x{length}cm ({package_size})")
         
         return jsonify({
             'message': 'Sensor data stored successfully',
@@ -1372,7 +1384,7 @@ def store_sensor_data():
         })
         
     except Exception as e:
-        print(f"Error storing sensor data: {e}")
+        logger.error(f"Error storing sensor data: {e}")
         return jsonify({
             'error': 'Failed to store sensor data',
             'details': str(e)
@@ -1397,7 +1409,7 @@ def get_sensor_data():
         })
         
     except Exception as e:
-        print(f"Error getting sensor data: {e}")
+        logger.error(f"Error getting sensor data: {e}")
         return jsonify({
             'error': 'Failed to get sensor data',
             'details': str(e)
@@ -1420,7 +1432,7 @@ def clear_sensor_data():
         })
         
     except Exception as e:
-        print(f"Error clearing sensor data: {e}")
+        logger.error(f"Error clearing sensor data: {e}")
         return jsonify({
             'error': 'Failed to clear sensor data',
             'details': str(e)
@@ -1482,11 +1494,12 @@ def get_workflow_status():
             })
         
     except Exception as e:
-        print(f"Error getting workflow status: {e}")
+        logger.error(f"Error getting workflow status: {e}")
         return jsonify({
             'error': 'Failed to get workflow status',
             'details': str(e)
         }), 500
 
 if __name__ == '__main__':
-    socketio.run(app, debug=True, host='0.0.0.0', port=5000)
+    logger.info("Starting Flask application with SocketIO...")
+    socketio.run(app, debug=False, host='0.0.0.0', port=5000)
