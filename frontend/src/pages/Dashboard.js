@@ -16,9 +16,6 @@ import {
   Dashboard as DashboardIcon,
   PlayArrow as PlayIcon,
   Stop as StopIcon,
-  Refresh as RefreshIcon,
-  Settings as SettingsIcon,
-  PowerSettingsNew as PowerIcon,
   CheckCircle as CheckCircleIcon,
   Error as ErrorIcon,
   Print as PrintIcon,
@@ -27,24 +24,60 @@ import {
   Memory as MemoryIcon,
   Thermostat as ThermostatIcon,
 } from '@mui/icons-material';
+import { useNotification } from '../components/Notification';
 
 export default function Dashboard() {
   const theme = useTheme();
+  const { showNotification, hideNotification, clearNotificationsBy, NotificationContainer } = useNotification();
   const [raspiStatus, setRaspiStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [startingSystem, setStartingSystem] = useState(false);
   const [stoppingSystem, setStoppingSystem] = useState(false);
+  const [lastActionTime, setLastActionTime] = useState(0);
 
   // Fetch Raspberry Pi status
-  const fetchRaspiStatus = async () => {
+  const fetchRaspiStatus = async (showLoadingNotification = false) => {
+    if (loading && showLoadingNotification) return; // Prevent duplicate refresh calls
+    
+    // Additional debouncing for manual refresh calls
+    if (showLoadingNotification) {
+      const now = Date.now();
+      if (now - lastActionTime < 1000) return; // Prevent rapid manual refreshes
+      setLastActionTime(now);
+    }
+    
     try {
       setLoading(true);
+      
+      if (showLoadingNotification) {
+        // Clear existing status notifications
+        clearNotificationsBy({ title: 'Refreshing Status' });
+        clearNotificationsBy({ title: 'Status Updated' });
+        clearNotificationsBy({ title: 'Connection Failed' });
+        
+        showNotification({
+          title: 'Refreshing Status',
+          message: 'Fetching latest system information...',
+          severity: 'info',
+          duration: 4000,
+        });
+      }
+      
       const response = await fetch(`${process.env.REACT_APP_RASPI_BASE_URL}/status`);
       if (response.ok) {
         const data = await response.json();
         setRaspiStatus(data);
         setLastUpdated(new Date().toLocaleString());
+        
+        if (showLoadingNotification) {
+          showNotification({
+            title: 'Status Updated',
+            message: 'System status refreshed successfully.',
+            severity: 'success',
+            duration: 5000,
+          });
+        }
       } else {
         throw new Error('Failed to fetch status');
       }
@@ -52,6 +85,15 @@ export default function Dashboard() {
       console.error('Error fetching Raspberry Pi status:', error);
       setRaspiStatus({ error: 'Connection failed' });
       setLastUpdated(new Date().toLocaleString());
+      
+      if (showLoadingNotification) {
+        showNotification({
+          title: 'Connection Failed',
+          message: 'Unable to fetch system status. Please check connection.',
+          severity: 'error',
+          duration: 5000,
+        });
+      }
     } finally {
       setLoading(false);
     }
@@ -59,8 +101,27 @@ export default function Dashboard() {
 
   // Start the motor system
   const startSystem = async () => {
+    const now = Date.now();
+    if (startingSystem || (now - lastActionTime < 2000)) return; // Prevent rapid clicks
+    
     try {
       setStartingSystem(true);
+      setLastActionTime(now);
+      
+      // Clear any existing system-related notifications
+      clearNotificationsBy({ title: '🚀 Starting System' });
+      clearNotificationsBy({ title: '🚀 System Started Successfully' });
+      clearNotificationsBy({ title: '❌ System Start Failed' });
+      
+      // Show loading notification
+      const loadingNotificationId = showNotification({
+        title: '🚀 Starting System',
+        message: 'Initializing motor system components...',
+        severity: 'info',
+        type: 'system',
+        persistent: true,
+      });
+      
       const response = await fetch(`${process.env.REACT_APP_API_ENDPOINT || 'http://192.168.100.61:5000/api'}/system/start`, {
         method: 'POST',
         headers: {
@@ -70,16 +131,39 @@ export default function Dashboard() {
 
       const data = await response.json();
 
+      // Hide loading notification
+      if (loadingNotificationId) {
+        setTimeout(() => hideNotification(loadingNotificationId), 300);
+      }
+
       if (response.ok) {
         console.log('✅ Motor system started successfully:', data);
-        alert(`Motor system started successfully!\n${data.message}`);
+        showNotification({
+          title: '🚀 System Started Successfully',
+          message: `${data.message || 'Motor system is now running and ready for operation'}`,
+          severity: 'success',
+          type: 'system',
+          duration: 10000,
+        });
       } else {
         console.error('❌ Failed to start motor system:', data);
-        alert(`Failed to start motor system:\n${data.message || data.error}`);
+        showNotification({
+          title: '❌ System Start Failed',
+          message: `${data.message || data.error || 'Unable to start system - please check system status'}`,
+          severity: 'error',
+          type: 'system',
+          duration: 10000,
+        });
       }
     } catch (error) {
       console.error('❌ Error starting motor system:', error);
-      alert(`Error starting motor system:\n${error.message}`);
+      showNotification({
+        title: '🔌 Connection Error (Start)',
+        message: `${error.message || 'Unable to connect to system - check network connection'}`,
+        severity: 'error',
+        type: 'system',
+        duration: 10000,
+      });
     } finally {
       setStartingSystem(false);
     }
@@ -87,8 +171,27 @@ export default function Dashboard() {
 
   // Stop the motor system
   const stopSystem = async () => {
+    const now = Date.now();
+    if (stoppingSystem || (now - lastActionTime < 2000)) return; // Prevent rapid clicks
+    
     try {
       setStoppingSystem(true);
+      setLastActionTime(now);
+      
+      // Clear any existing system-related notifications
+      clearNotificationsBy({ title: '🛑 Stopping System' });
+      clearNotificationsBy({ title: '🛑 System Stopped Successfully' });
+      clearNotificationsBy({ title: '⚠️ System Stop Failed' });
+      
+      // Show loading notification
+      const loadingNotificationId = showNotification({
+        title: '🛑 Stopping System',
+        message: 'Safely shutting down motor system...',
+        severity: 'info',
+        type: 'system',
+        persistent: true,
+      });
+      
       const response = await fetch(`${process.env.REACT_APP_API_ENDPOINT || 'http://192.168.100.61:5000/api'}/system/stop`, {
         method: 'POST',
         headers: {
@@ -98,16 +201,39 @@ export default function Dashboard() {
 
       const data = await response.json();
 
+      // Hide loading notification
+      if (loadingNotificationId) {
+        setTimeout(() => hideNotification(loadingNotificationId), 300);
+      }
+
       if (response.ok) {
         console.log('✅ Motor system stopped successfully:', data);
-        alert(`Motor system stopped successfully!\n${data.message}`);
+        showNotification({
+          title: '🛑 System Stopped Successfully',
+          message: `${data.message || 'Motor system has been safely shut down'}`,
+          severity: 'success',
+          type: 'system',
+          duration: 10000,
+        });
       } else {
         console.error('❌ Failed to stop motor system:', data);
-        alert(`Failed to stop motor system:\n${data.message || data.error}`);
+        showNotification({
+          title: '⚠️ System Stop Failed',
+          message: `${data.message || data.error || 'Unable to stop system - manual intervention may be required'}`,
+          severity: 'error',
+          type: 'system',
+          duration: 10000,
+        });
       }
     } catch (error) {
       console.error('❌ Error stopping motor system:', error);
-      alert(`Error stopping motor system:\n${error.message}`);
+      showNotification({
+        title: '🔌 Connection Error (Stop)',
+        message: `${error.message || 'Unable to connect to system - check network connection'}`,
+        severity: 'error',
+        type: 'system',
+        duration: 10000,
+      });
     } finally {
       setStoppingSystem(false);
     }
@@ -165,26 +291,7 @@ export default function Dashboard() {
       variant: 'contained',
       action: stopSystem,
       loading: stoppingSystem
-    },
-    { 
-      label: 'Refresh Data', 
-      icon: <RefreshIcon />, 
-      color: 'primary',
-      variant: 'contained',
-      action: fetchRaspiStatus
-    },
-    { 
-      label: 'System Settings', 
-      icon: <SettingsIcon />, 
-      color: 'secondary',
-      variant: 'contained'
-    },
-    { 
-      label: 'Power Control', 
-      icon: <PowerIcon />, 
-      color: 'warning',
-      variant: 'contained'
-    },
+    }
   ];
 
   return (
@@ -396,6 +503,9 @@ export default function Dashboard() {
           </Paper>
         </Grid>
       </Grid>
+      
+      {/* Custom Notifications */}
+      <NotificationContainer />
     </Box>
   );
 }
