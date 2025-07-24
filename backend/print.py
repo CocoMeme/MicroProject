@@ -44,7 +44,7 @@ class ReceiptPrinter:
             self.font_large = ImageFont.load_default()
 
     def create_receipt(self, order_data):
-        """Create receipt image with better error handling"""
+        """Create receipt image in receipt style format without QR code"""
         try:
             # Validate input data
             if not order_data or not isinstance(order_data, dict):
@@ -56,37 +56,28 @@ class ReceiptPrinter:
             if missing_fields:
                 raise ValueError(f"Missing required fields: {missing_fields}")
 
-            # Create QR code with error handling
-            try:
-                qr = qrcode.QRCode(version=1, box_size=16, border=4)
-                qr.add_data(str(order_data['orderNumber']))
-                qr.make(fit=True)
-                qr_img = qr.make_image(fill_color="black", back_color="white").convert('RGB')
-            except Exception as e:
-                logger.error(f"Failed to create QR code: {e}")
-                raise ValueError(f"QR code generation failed: {e}")
-
-            # Resize QR code
-            qr_width = 400
-            qr_height = int(qr_width * qr_img.height / qr_img.width)
-            qr_img = qr_img.resize((qr_width, qr_height))
-
-            # Calculate layout dimensions
+            # Calculate layout dimensions for receipt style
             text_height_regular = 25
             text_height_large = 35
+            text_height_title = 30
             spacing = 15
+            line_spacing = 5
 
-            header_height = text_height_regular * 4  # Order ID, Customer, Contact, Address
+            # Calculate total height needed for receipt-style layout
+            header_section = text_height_title + spacing  # Store/business header
+            separator_line = line_spacing + spacing
+            order_section = text_height_regular * 2 + spacing  # Order ID and Date
+            customer_section = text_height_regular * 3  # Customer, Contact, Address
             # Add extra height if email exists
             if order_data.get('email') and order_data['email'].strip():
-                header_height += text_height_regular
-            product_section_height = text_height_large * 2
-            footer_height = text_height_regular
+                customer_section += text_height_regular
+            product_section = text_height_large * 2 + spacing  # Product and Amount
+            footer_section = text_height_regular * 2 + spacing  # Thank you message
 
             total_height = (
-                spacing + header_height + spacing +
-                product_section_height + spacing +
-                footer_height + spacing + qr_height + spacing
+                spacing + header_section + separator_line + order_section + 
+                separator_line + customer_section + separator_line + 
+                product_section + separator_line + footer_section + spacing
             )
 
             # Create receipt image
@@ -94,9 +85,29 @@ class ReceiptPrinter:
             draw = ImageDraw.Draw(receipt)
             y = spacing
 
-            # Draw text content with safe string handling
-            draw.text((10, y), f"Order-id: {str(order_data['orderNumber'])}", font=self.font_title, fill='black')
+            # Store/Business Header (centered)
+            business_name = "ORDER RECEIPT"
+            bbox = draw.textbbox((0, 0), business_name, font=self.font_large)
+            text_width = bbox[2] - bbox[0]
+            x_center = (384 - text_width) // 2
+            draw.text((x_center, y), business_name, font=self.font_large, fill='black')
+            y += text_height_title + spacing
+
+            # First separator line
+            draw.line([(10, y), (374, y)], fill='black', width=1)
+            y += line_spacing + spacing
+
+            # Order Information Section
+            draw.text((10, y), f"Order ID: {str(order_data['orderNumber'])}", font=self.font_title, fill='black')
             y += text_height_regular
+            draw.text((10, y), f"Date: {str(order_data['date'])}", font=self.font_regular, fill='black')
+            y += text_height_regular + spacing
+
+            # Second separator line
+            draw.line([(10, y), (374, y)], fill='black', width=1)
+            y += line_spacing + spacing
+
+            # Customer Information Section
             draw.text((10, y), f"Customer: {str(order_data['customerName'])}", font=self.font_regular, fill='black')
             y += text_height_regular
             
@@ -107,23 +118,41 @@ class ReceiptPrinter:
                 
             draw.text((10, y), f"Contact: {str(order_data.get('contactNumber', 'N/A'))}", font=self.font_regular, fill='black')
             y += text_height_regular
-            draw.text((10, y), f"Address: {str(order_data['address'])}", font=self.font_regular, fill='black')
+            draw.text((10, y), f"Address: {str(order_data.get('address', 'N/A'))}", font=self.font_regular, fill='black')
             y += text_height_regular + spacing
 
+            # Third separator line
+            draw.line([(10, y), (374, y)], fill='black', width=1)
+            y += line_spacing + spacing
+
+            # Product and Amount Section
             draw.text((10, y), f"Product: {str(order_data['productName'])}", font=self.font_large, fill='black')
             y += text_height_large
-            draw.text((10, y), f"Amount: {str(order_data['amount'])}", font=self.font_large, fill='black')
+            
+            # Format amount with currency symbol
+            amount_str = f"₱ {str(order_data['amount'])}"
+            draw.text((10, y), f"Amount: {amount_str}", font=self.font_large, fill='black')
             y += text_height_large + spacing
 
-            draw.text((10, y), f"Date: {str(order_data['date'])}", font=self.font_regular, fill='black')
-            y += text_height_regular + spacing
-
-            # Draw separator line
+            # Final separator line
             draw.line([(10, y), (374, y)], fill='black', width=1)
-            y += spacing
+            y += line_spacing + spacing
 
-            # Paste QR code
-            receipt.paste(qr_img, (0, y))
+            # Footer Section (centered)
+            thank_you_msg = "Thank you for your order!"
+            bbox = draw.textbbox((0, 0), thank_you_msg, font=self.font_regular)
+            text_width = bbox[2] - bbox[0]
+            x_center = (384 - text_width) // 2
+            draw.text((x_center, y), thank_you_msg, font=self.font_regular, fill='black')
+            y += text_height_regular
+            
+            # Print date/time
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            printed_msg = f"Printed: {current_time}"
+            bbox = draw.textbbox((0, 0), printed_msg, font=self.font_regular)
+            text_width = bbox[2] - bbox[0]
+            x_center = (384 - text_width) // 2
+            draw.text((x_center, y), printed_msg, font=self.font_regular, fill='black')
             
             logger.info(f"Receipt created successfully for order {order_data['orderNumber']}")
             return receipt
@@ -226,6 +255,46 @@ class ReceiptPrinter:
             except Exception as e:
                 logger.error(f"Unexpected error during printing: {e}")
                 return False, f"Print failed: {str(e)}"
+
+    def create_qr_only(self, order_number):
+        """Create QR code image only without any receipt details"""
+        try:
+            if not order_number:
+                raise ValueError("Order number is required for QR code generation")
+
+            # Create QR code
+            qr = qrcode.QRCode(version=1, box_size=16, border=4)
+            qr.add_data(str(order_number))
+            qr.make(fit=True)
+            qr_img = qr.make_image(fill_color="black", back_color="white").convert('RGB')
+            
+            # Resize QR code to fit thermal printer width (384px)
+            qr_width = 384
+            qr_height = int(qr_width * qr_img.height / qr_img.width)
+            qr_img = qr_img.resize((qr_width, qr_height))
+            
+            logger.info(f"QR code created successfully for order {order_number}")
+            return qr_img
+
+        except Exception as e:
+            logger.error(f"Error creating QR code: {e}")
+            return None
+
+    def print_qr_only(self, order_number):
+        """Print only QR code without receipt details"""
+        try:
+            qr_image = self.create_qr_only(order_number)
+            if not qr_image:
+                return False, "Failed to create QR code"
+            
+            success, message = self.print_receipt(qr_image)
+            if success:
+                logger.info(f"QR code printed successfully for order {order_number}")
+            return success, message
+            
+        except Exception as e:
+            logger.error(f"Error printing QR code: {e}")
+            return False, f"Print QR failed: {str(e)}"
 
     def check_printer(self):
         """Check if printer device is available"""

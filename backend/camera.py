@@ -511,7 +511,7 @@ class CameraManager:
 					
 					# Check if this QR code was already scanned according to the backend
 					if validation_result.get('already_scanned', False):
-						# Show "Valid QR Code!" first for 5 seconds, then "Already Scanned!"
+						# Show "Already Scanned!" message
 						should_process = (
 							data != self.last_qr_data or 
 							self.last_qr_time is None or
@@ -526,15 +526,11 @@ class CameraManager:
 							self.current_qr_data = data
 							self.current_qr_rect = obj.rect
 							
-							# Show "Valid QR Code!" first
-							self.display_message = "Valid QR Code!"
-							self.display_message_color = (0, 255, 0)  # Green
+							# Show "Already Scanned!" message
+							self.display_message = "Already Scanned!"
+							self.display_message_color = (0, 165, 255)  # Orange
 							self.display_message_start_time = current_time
-							self.display_message_duration = 5.0
-							
-							# Schedule "Already Scanned!" message after 5 seconds
-							self.pending_already_scanned = True
-							self.pending_already_scanned_start_time = current_time + 5.0
+							self.display_message_duration = 3.0
 							
 							# Save QR code image
 							x, y, w, h = obj.rect
@@ -558,17 +554,7 @@ class CameraManager:
 					
 					# Check if this is invalid (not verified)
 					if not validation_result['valid']:
-						# Draw red box for invalid QR codes
-						points = obj.polygon
-						if len(points) >= 4:
-							pts = [(point.x, point.y) for point in points]
-							cv2.polylines(frame, [cv2.convexHull(np.array(pts, dtype=np.int32))], isClosed=True, color=(0, 0, 255), thickness=3)
-						
-						# Display "Invalid" message
-						x, y, w, h = obj.rect
-						cv2.putText(frame, f"{data} - Not Valid", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-						
-						# Add to history for tracking but don't prevent re-scanning invalid codes
+						# Show message for invalid QR codes
 						should_process = (
 							data != self.last_qr_data or 
 							self.last_qr_time is None or
@@ -578,6 +564,16 @@ class CameraManager:
 						if should_process:
 							self.last_qr_data = data
 							self.last_qr_time = current_time
+							
+							# Store QR data and rect for message display
+							self.current_qr_data = data
+							self.current_qr_rect = obj.rect
+							
+							# Show "QR Not Found in Database!" message
+							self.display_message = "QR Not Found in Database!"
+							self.display_message_color = (0, 0, 255)  # Red
+							self.display_message_start_time = current_time
+							self.display_message_duration = 3.0
 							
 							# Save QR code image
 							x, y, w, h = obj.rect
@@ -589,7 +585,14 @@ class CameraManager:
 							# Notify callbacks about new QR detection
 							self._notify_qr_callbacks(data, validation_result)
 							
-							logger.warning(f"Invalid QR code detected: {data} - {validation_result.get('message', 'Unknown error')}")
+							logger.warning(f"Invalid QR code detected: {data} - {validation_result.get('message', 'Not found in orders database')}")
+						
+						# Draw red box for invalid QR codes
+						points = obj.polygon
+						if len(points) >= 4:
+							pts = [(point.x, point.y) for point in points]
+							cv2.polylines(frame, [cv2.convexHull(np.array(pts, dtype=np.int32))], isClosed=True, color=(0, 0, 255), thickness=3)
+						
 						continue
 					
 					# Valid QR code that hasn't been scanned before
@@ -608,8 +611,8 @@ class CameraManager:
 						self.current_qr_data = data
 						self.current_qr_rect = obj.rect
 						
-						# Show "Valid QR Code!" message
-						self.display_message = "Valid QR Code!"
+						# Show "Scanned Successfully!" message
+						self.display_message = "Scanned Successfully!"
 						self.display_message_color = (0, 255, 0)  # Green
 						self.display_message_start_time = current_time
 						self.display_message_duration = 5.0

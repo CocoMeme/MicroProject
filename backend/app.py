@@ -138,6 +138,28 @@ def init_db():
         )
     ''')
     
+    # Create index for faster lookups
+    try:
+        c.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_scanned_codes_order_id ON scanned_codes(order_id)')
+    except sqlite3.OperationalError:
+        # Index might already exist
+        pass
+    
+    # Clean up any duplicate entries that might exist (keep the oldest scan)
+    c.execute('''
+        DELETE FROM scanned_codes 
+        WHERE id NOT IN (
+            SELECT MIN(id) 
+            FROM scanned_codes 
+            GROUP BY order_id
+        )
+    ''')
+    
+    if c.rowcount > 0:
+        logger.info(f"Cleaned up {c.rowcount} duplicate scanned codes")
+    
+    conn.commit()
+    
     # Create loaded_sensor_data table to store MQTT sensor data temporarily
     c.execute('''
         CREATE TABLE IF NOT EXISTS loaded_sensor_data (
@@ -230,6 +252,56 @@ def dict_factory(cursor, row):
 
 # Configuration for Raspberry Pi
 RASPBERRY_PI_URL = os.getenv('RASPBERRY_PI_URL', 'http://localhost:5001')  # Default value if not set
+
+def send_print_request_to_raspi(order_data):
+    """Send print request to Raspberry Pi with order details"""
+    try:
+        # Prepare order data for printing
+        print_data = {
+            'orderNumber': order_data['order_number'],
+            'customerName': order_data['customer_name'],
+            'productName': order_data['product_name'],
+            'amount': str(order_data['amount']),
+            'date': order_data['date'],
+            'address': order_data.get('address', 'N/A'),
+            'contactNumber': order_data.get('contact_number', 'N/A'),
+            'email': order_data.get('email', '')
+        }
+        
+        logger.info(f"Sending print request to Raspberry Pi for order {order_data['order_number']}")
+        
+        # Send print request to Raspberry Pi
+        response = requests.post(
+            f"{RASPBERRY_PI_URL}/print-receipt",
+            json=print_data,
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            logger.info(f"Successfully sent print request for order {order_data['order_number']}")
+            return True, "Print request sent successfully"
+        else:
+            error_msg = f"Print request failed with status {response.status_code}"
+            try:
+                error_data = response.json()
+                error_msg += f": {error_data.get('error', 'Unknown error')}"
+            except:
+                error_msg += f": {response.text}"
+            logger.error(error_msg)
+            return False, error_msg
+            
+    except requests.exceptions.Timeout:
+        error_msg = "Print request to Raspberry Pi timed out"
+        logger.error(error_msg)
+        return False, error_msg
+    except requests.exceptions.ConnectionError:
+        error_msg = "Cannot connect to Raspberry Pi printer service"
+        logger.error(error_msg)
+        return False, error_msg
+    except Exception as e:
+        error_msg = f"Print request failed: {str(e)}"
+        logger.error(error_msg)
+        return False, error_msg
 
 # Sample data for demonstration
 parcel_data = {
@@ -1186,41 +1258,18 @@ def delete_scanned_code(order_id):
             'details': str(e)
         }), 500
 
-@app.route('/api/scanned-codes', methods=['GET'])
-def get_scanned_codes():
-    """Get all scanned codes from the database"""
-    try:
-        conn = sqlite3.connect('database.db')
-        conn.row_factory = dict_factory
-        c = conn.cursor()
-        
-        c.execute('''
-            SELECT sc.*, o.customer_name, o.product_name, o.amount 
-            FROM scanned_codes sc
-            LEFT JOIN orders o ON sc.order_id = o.id
-            ORDER BY sc.scanned_at DESC
-        ''')
-        scanned_codes = c.fetchall()
-        
-        conn.close()
-        
-        return jsonify(scanned_codes), 200
-        
-    except Exception as e:
-        return jsonify({
-            'error': 'Failed to get scanned codes',
-            'details': str(e)
-        }), 500
-
 @app.route('/api/validate-qr', methods=['POST'])
 def validate_qr_code():
-    """Validate QR code against orders database"""
+    """Validate QR code against orders database and record in scanned_codes table"""
     try:
         data = request.get_json()
         qr_data = data.get('qr_data')
         
         if not qr_data:
             return jsonify({'error': 'No QR data provided'}), 400
+        
+        # Clean the QR data
+        qr_data = str(qr_data).strip()
         
         conn = sqlite3.connect('database.db')
         conn.row_factory = dict_factory
@@ -1231,12 +1280,14 @@ def validate_qr_code():
         order = c.fetchone()
         
         if order:
-            # Check if this order is already scanned
-            c.execute('SELECT * FROM scanned_codes WHERE order_id = ? AND isverified = ?', (order['id'], 'yes'))
+            # Valid order found - Check if this order is already scanned
+            # Use a more comprehensive check to prevent any duplicates
+            c.execute('SELECT * FROM scanned_codes WHERE order_id = ?', (order['id'],))
             already_scanned = c.fetchone()
             
             if already_scanned:
-                # Order already scanned
+                # Order already scanned - return existing scan info
+                logger.info(f"QR code {qr_data} already scanned at {already_scanned['scanned_at']}")
                 response_data = {
                     'valid': True,
                     'already_scanned': True,
@@ -1246,62 +1297,20 @@ def validate_qr_code():
                     'product_name': order['product_name'],
                     'amount': order['amount'],
                     'date': order['date'],
-                    'message': 'Already scanned',
+                    'message': f'Order {qr_data} was already scanned successfully',
                     'scanned_at': already_scanned['scanned_at']
                 }
             else:
-                # Get sensor data if available
-                c.execute('SELECT * FROM loaded_sensor_data ORDER BY created_at DESC LIMIT 1')
-                sensor_data = c.fetchone()
+                # Valid order, not yet scanned - process it
+                # Double-check one more time to prevent race conditions
+                c.execute('SELECT COUNT(*) as count FROM scanned_codes WHERE order_id = ?', (order['id'],))
+                existing_count = c.fetchone()['count']
                 
-                # Insert into scanned_codes table as verified
-                try:
-                    c.execute('''
-                        INSERT INTO scanned_codes (order_id, order_number, isverified, device)
-                        VALUES (?, ?, ?, ?)
-                    ''', (order['id'], order['order_number'], 'yes', 'raspberry_pi'))
-                    
-                    # If sensor data exists, create package information and then clear sensor data
-                    if sensor_data:
-                        # Create package information record
-                        c.execute('''
-                            INSERT INTO package_information 
-                            (order_id, order_number, weight, width, height, length, timestamp)
-                            VALUES (?, ?, ?, ?, ?, ?, ?)
-                        ''', (
-                            order['id'],
-                            order['order_number'],
-                            sensor_data['weight'],
-                            sensor_data['width'],
-                            sensor_data['height'],
-                            sensor_data['length'],
-                            datetime.now().isoformat()
-                        ))
-                        
-                        # Clear sensor data after successful validation
-                        c.execute('DELETE FROM loaded_sensor_data')
-                    
-                    conn.commit()
-                    
-                    # Get package information if it exists
-                    c.execute('SELECT * FROM package_information WHERE order_id = ?', (order['id'],))
-                    package_info = c.fetchone()
-                    
-                    response_data = {
-                        'valid': True,
-                        'already_scanned': False,
-                        'order_id': order['id'],
-                        'order_number': order['order_number'],
-                        'customer_name': order['customer_name'],
-                        'product_name': order['product_name'],
-                        'amount': order['amount'],
-                        'date': order['date'],
-                        'message': 'Valid - Successfully scanned',
-                        'package_information': package_info,
-                        'sensor_data_applied': sensor_data is not None
-                    }
-                except sqlite3.IntegrityError:
-                    # Handle race condition where another scan might have inserted the same order
+                if existing_count > 0:
+                    # Another process already scanned this while we were processing
+                    logger.warning(f"Race condition: QR code {qr_data} was scanned by another process")
+                    c.execute('SELECT * FROM scanned_codes WHERE order_id = ?', (order['id'],))
+                    existing_scan = c.fetchone()
                     response_data = {
                         'valid': True,
                         'already_scanned': True,
@@ -1311,20 +1320,108 @@ def validate_qr_code():
                         'product_name': order['product_name'],
                         'amount': order['amount'],
                         'date': order['date'],
-                        'message': 'Already scanned'
+                        'message': f'Order {qr_data} was already scanned successfully',
+                        'scanned_at': existing_scan['scanned_at']
                     }
+                else:
+                    # Safe to insert - Get sensor data if available
+                    c.execute('SELECT * FROM loaded_sensor_data ORDER BY created_at DESC LIMIT 1')
+                    sensor_data = c.fetchone()
+                    
+                    # Insert into scanned_codes table as verified to prevent duplicates
+                    try:
+                        c.execute('''
+                            INSERT INTO scanned_codes (order_id, order_number, isverified, device)
+                            VALUES (?, ?, ?, ?)
+                        ''', (order['id'], order['order_number'], 'yes', 'raspberry_pi'))
+                        
+                        # If sensor data exists, create package information and then clear sensor data
+                        package_info = None
+                        if sensor_data:
+                            # Create package information record
+                            c.execute('''
+                                INSERT INTO package_information 
+                                (order_id, order_number, weight, width, height, length, timestamp)
+                                VALUES (?, ?, ?, ?, ?, ?, ?)
+                            ''', (
+                                order['id'],
+                                order['order_number'],
+                                sensor_data['weight'],
+                                sensor_data['width'],
+                                sensor_data['height'],
+                                sensor_data['length'],
+                                datetime.now().isoformat()
+                            ))
+                            
+                            # Get the created package info
+                            c.execute('SELECT * FROM package_information WHERE order_id = ? ORDER BY created_at DESC LIMIT 1', (order['id'],))
+                            package_info = c.fetchone()
+                            
+                            # Clear sensor data after successful validation
+                            c.execute('DELETE FROM loaded_sensor_data')
+                            logger.info(f"Applied sensor data to order {qr_data} and cleared sensor buffer")
+                        
+                        conn.commit()
+                        logger.info(f"Successfully scanned QR code {qr_data} for order {order['order_number']}")
+                        
+                        # Send print request to Raspberry Pi for successful scan
+                        logger.info(f"Attempting to send print request for order {order['order_number']}")
+                        try:
+                            print_success, print_message = send_print_request_to_raspi(order)
+                            if print_success:
+                                logger.info(f"Print request sent successfully for order {order['order_number']}")
+                            else:
+                                logger.warning(f"Print request failed for order {order['order_number']}: {print_message}")
+                        except Exception as e:
+                            print_success, print_message = False, f"Print function error: {str(e)}"
+                            logger.error(f"Exception in print request for order {order['order_number']}: {e}")
+                        
+                        response_data = {
+                            'valid': True,
+                            'already_scanned': False,
+                            'order_id': order['id'],
+                            'order_number': order['order_number'],
+                            'customer_name': order['customer_name'],
+                            'product_name': order['product_name'],
+                            'amount': order['amount'],
+                            'date': order['date'],
+                            'message': f'Order {qr_data} scanned successfully!',
+                            'package_information': package_info,
+                            'sensor_data_applied': sensor_data is not None,
+                            'print_requested': print_success,
+                            'print_message': print_message
+                        }
+                    except sqlite3.IntegrityError as ie:
+                        # Handle UNIQUE constraint violation
+                        logger.warning(f"UNIQUE constraint violation for QR code {qr_data}: {ie}")
+                        c.execute('SELECT * FROM scanned_codes WHERE order_id = ?', (order['id'],))
+                        existing_scan = c.fetchone()
+                        response_data = {
+                            'valid': True,
+                            'already_scanned': True,
+                            'order_id': order['id'],
+                            'order_number': order['order_number'],
+                            'customer_name': order['customer_name'],
+                            'product_name': order['product_name'],
+                            'amount': order['amount'],
+                            'date': order['date'],
+                            'message': f'Order {qr_data} was already scanned successfully',
+                            'scanned_at': existing_scan['scanned_at'] if existing_scan else 'Unknown'
+                        }
         else:
-            # Invalid QR code - order not found, don't insert anything
+            # Invalid QR code - order not found in database
+            logger.warning(f"QR code {qr_data} not found in orders database")
             response_data = {
                 'valid': False, 
                 'already_scanned': False,
-                'message': 'QR code not found in orders database'
+                'message': f'QR code {qr_data} not found in orders database'
             }
         
         conn.close()
         return jsonify(response_data), 200
             
     except Exception as e:
+        logger.error(f"Error validating QR code {qr_data if 'qr_data' in locals() else 'Unknown'}: {e}")
         return jsonify({
             'valid': False, 
             'already_scanned': False,
@@ -1387,6 +1484,227 @@ def store_sensor_data():
         logger.error(f"Error storing sensor data: {e}")
         return jsonify({
             'error': 'Failed to store sensor data',
+            'details': str(e)
+        }), 500
+
+@app.route('/api/scanned-codes', methods=['GET'])
+def get_scanned_codes():
+    """Get all scanned QR codes with their order information"""
+    try:
+        conn = sqlite3.connect('database.db')
+        conn.row_factory = dict_factory
+        c = conn.cursor()
+        
+        # Get all scanned codes with order details and package information
+        c.execute('''
+            SELECT 
+                sc.id as scan_id,
+                sc.order_id,
+                sc.order_number,
+                sc.isverified,
+                sc.scanned_at,
+                sc.device,
+                o.customer_name,
+                o.product_name,
+                o.amount,
+                o.date as order_date,
+                pi.weight,
+                pi.width,
+                pi.height,
+                pi.length,
+                pi.timestamp as package_timestamp
+            FROM scanned_codes sc
+            LEFT JOIN orders o ON sc.order_id = o.id
+            LEFT JOIN package_information pi ON sc.order_id = pi.order_id
+            ORDER BY sc.scanned_at DESC
+        ''')
+        
+        scanned_codes = c.fetchall()
+        conn.close()
+        
+        return jsonify({
+            'scanned_codes': scanned_codes,
+            'total_count': len(scanned_codes)
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting scanned codes: {e}")
+        return jsonify({
+            'error': 'Failed to get scanned codes',
+            'details': str(e)
+        }), 500
+
+@app.route('/api/scanned-codes/reset', methods=['POST'])
+def reset_scanned_codes():
+    """Reset/clear all scanned codes (for testing or restart)"""
+    try:
+        data = request.get_json() or {}
+        confirm = data.get('confirm', False)
+        
+        if not confirm:
+            return jsonify({
+                'error': 'Confirmation required',
+                'message': 'Set confirm=true to reset all scanned codes'
+            }), 400
+        
+        conn = sqlite3.connect('database.db')
+        c = conn.cursor()
+        
+        # Count before deletion
+        c.execute('SELECT COUNT(*) FROM scanned_codes')
+        count_before = c.fetchone()[0]
+        
+        # Clear all scanned codes
+        c.execute('DELETE FROM scanned_codes')
+        conn.commit()
+        conn.close()
+        
+        logger.info(f"Reset {count_before} scanned codes")
+        
+        return jsonify({
+            'message': f'Successfully reset {count_before} scanned codes',
+            'cleared_count': count_before
+        })
+        
+    except Exception as e:
+        logger.error(f"Error resetting scanned codes: {e}")
+        return jsonify({
+            'error': 'Failed to reset scanned codes',
+            'details': str(e)
+        }), 500
+
+@app.route('/api/scanned-codes/<order_number>', methods=['DELETE'])
+def remove_scanned_code(order_number):
+    """Remove a specific scanned code to allow re-scanning"""
+    try:
+        conn = sqlite3.connect('database.db')
+        c = conn.cursor()
+        
+        # Check if the order exists in scanned codes
+        c.execute('SELECT * FROM scanned_codes WHERE order_number = ?', (order_number,))
+        existing = c.fetchone()
+        
+        if not existing:
+            return jsonify({
+                'error': 'Order not found in scanned codes',
+                'order_number': order_number
+            }), 404
+        
+        # Remove the scanned code
+        c.execute('DELETE FROM scanned_codes WHERE order_number = ?', (order_number,))
+        conn.commit()
+        conn.close()
+        
+        logger.info(f"Removed scanned code for order {order_number}")
+        
+        return jsonify({
+            'message': f'Successfully removed scanned code for order {order_number}',
+            'order_number': order_number
+        })
+        
+    except Exception as e:
+        logger.error(f"Error removing scanned code for {order_number}: {e}")
+        return jsonify({
+            'error': 'Failed to remove scanned code',
+            'details': str(e)
+        }), 500
+
+@app.route('/api/scanned-codes/check-duplicates', methods=['GET'])
+def check_duplicates():
+    """Check for duplicate scanned codes"""
+    try:
+        conn = sqlite3.connect('database.db')
+        conn.row_factory = dict_factory
+        c = conn.cursor()
+        
+        # Find duplicates
+        c.execute('''
+            SELECT order_id, COUNT(*) as count
+            FROM scanned_codes 
+            GROUP BY order_id 
+            HAVING COUNT(*) > 1
+        ''')
+        duplicates = c.fetchall()
+        
+        # Get detailed info about duplicates
+        duplicate_details = []
+        for dup in duplicates:
+            c.execute('SELECT * FROM scanned_codes WHERE order_id = ? ORDER BY scanned_at', (dup['order_id'],))
+            details = c.fetchall()
+            duplicate_details.append({
+                'order_id': dup['order_id'],
+                'count': dup['count'],
+                'entries': details
+            })
+        
+        conn.close()
+        
+        return jsonify({
+            'has_duplicates': len(duplicates) > 0,
+            'duplicate_count': len(duplicates),
+            'duplicates': duplicate_details
+        })
+        
+    except Exception as e:
+        logger.error(f"Error checking duplicates: {e}")
+        return jsonify({
+            'error': 'Failed to check duplicates',
+            'details': str(e)
+        }), 500
+
+@app.route('/api/scanned-codes/clean-duplicates', methods=['POST'])
+def clean_duplicates():
+    """Remove duplicate scanned codes, keeping only the oldest entry for each order"""
+    try:
+        data = request.get_json() or {}
+        confirm = data.get('confirm', False)
+        
+        if not confirm:
+            return jsonify({
+                'error': 'Confirmation required',
+                'message': 'Set confirm=true to clean duplicates'
+            }), 400
+        
+        conn = sqlite3.connect('database.db')
+        c = conn.cursor()
+        
+        # Count duplicates before cleaning
+        c.execute('''
+            SELECT COUNT(*) FROM scanned_codes 
+            WHERE id NOT IN (
+                SELECT MIN(id) 
+                FROM scanned_codes 
+                GROUP BY order_id
+            )
+        ''')
+        duplicate_count = c.fetchone()[0]
+        
+        # Remove duplicates (keep the oldest scan for each order)
+        c.execute('''
+            DELETE FROM scanned_codes 
+            WHERE id NOT IN (
+                SELECT MIN(id) 
+                FROM scanned_codes 
+                GROUP BY order_id
+            )
+        ''')
+        
+        removed_count = c.rowcount
+        conn.commit()
+        conn.close()
+        
+        logger.info(f"Cleaned up {removed_count} duplicate scanned codes")
+        
+        return jsonify({
+            'message': f'Successfully removed {removed_count} duplicate entries',
+            'removed_count': removed_count,
+            'duplicate_count_before': duplicate_count
+        })
+        
+    except Exception as e:
+        logger.error(f"Error cleaning duplicates: {e}")
+        return jsonify({
+            'error': 'Failed to clean duplicates',
             'details': str(e)
         }), 500
 

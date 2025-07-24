@@ -1186,15 +1186,25 @@ def home():
 def print_qr():
     try:
         # Get order data from request
-        order_data = request.get_json()
+        request_data = request.get_json()
         
-        if not order_data:
-            logger.warning("Print request received with no data")
+        if not request_data:
+            logger.warning("Print QR request received with no data")
             return jsonify({
-                'error': 'No order data provided'
+                'error': 'No data provided'
             }), 400
 
-        logger.info(f"Print request received for order: {order_data.get('orderNumber', 'Unknown')}")
+        # Extract order number - can be from orderNumber field or direct value
+        order_number = request_data.get('orderNumber') or request_data.get('order_number')
+        
+        if not order_number:
+            logger.error("No order number provided for QR printing")
+            return jsonify({
+                'error': 'Order number is required',
+                'details': 'Please provide orderNumber or order_number field'
+            }), 400
+
+        logger.info(f"QR print request received for order: {order_number}")
 
         # Check if printer is available
         if not printer.check_printer():
@@ -1204,7 +1214,54 @@ def print_qr():
                 'details': 'Please check printer connection and USB cable'
             }), 503
 
-        # Required fields check (made more flexible)
+        # Print only QR code
+        success, message = printer.print_qr_only(order_number)
+        
+        if success:
+            logger.info(f"Successfully printed QR code for order {order_number}")
+            return jsonify({
+                'message': 'QR code printed successfully',
+                'order_number': str(order_number),
+                'timestamp': datetime.now().isoformat()
+            })
+        else:
+            logger.error(f"Failed to print QR code: {message}")
+            return jsonify({
+                'error': 'Failed to print QR code',
+                'details': message
+            }), 500
+
+    except Exception as e:
+        logger.error(f"Unexpected error processing QR print request: {str(e)}", exc_info=True)
+        return jsonify({
+            'error': 'Internal server error',
+            'details': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+@app.route('/print-receipt', methods=['POST'])
+def print_receipt():
+    try:
+        # Get order data from request
+        order_data = request.get_json()
+        
+        if not order_data:
+            logger.warning("Print receipt request received with no data")
+            return jsonify({
+                'error': 'No order data provided'
+            }), 400
+
+        logger.info(f"Receipt print request received for order: {order_data.get('orderNumber', 'Unknown')}")
+
+        # Check if printer is available
+        if not printer.check_printer():
+            logger.error("Printer is not available")
+            return jsonify({
+                'error': 'Printer is not available',
+                'details': 'Please check printer connection and USB cable'
+            }), 503
+
+        # Required fields check
         required_fields = ['orderNumber', 'customerName', 'productName', 'amount', 'date']
         missing_fields = [field for field in required_fields if not order_data.get(field)]
         
@@ -1249,9 +1306,9 @@ def print_qr():
         success, message = printer.print_receipt(receipt)
         
         if success:
-            logger.info(f"Successfully printed receipt for order {sanitized_data['orderNumber']}")
+            logger.info(f"Successfully printed full receipt for order {sanitized_data['orderNumber']}")
             return jsonify({
-                'message': 'Receipt printed successfully',
+                'message': 'Full receipt printed successfully',
                 'order_number': sanitized_data['orderNumber'],
                 'timestamp': datetime.now().isoformat()
             })
@@ -1263,7 +1320,7 @@ def print_qr():
             }), 500
 
     except Exception as e:
-        logger.error(f"Unexpected error processing print request: {str(e)}", exc_info=True)
+        logger.error(f"Unexpected error processing receipt print request: {str(e)}", exc_info=True)
         return jsonify({
             'error': 'Internal server error',
             'details': str(e),
@@ -1743,14 +1800,90 @@ def handle_restart_mqtt():
 
 @socketio.on('print_qr')
 def handle_print_qr(data):
-    """WebSocket handler for QR printing - better for slow connections"""
+    """WebSocket handler for QR-only printing"""
     try:
-        logger.info(f"WebSocket print request received for order: {data.get('orderNumber', 'Unknown')}")
+        # Extract order number
+        order_number = data.get('orderNumber') or data.get('order_number') if data else None
+        
+        logger.info(f"WebSocket QR print request received for order: {order_number or 'Unknown'}")
         
         # Emit progress status
         emit('print_status', {
             'status': 'processing',
-            'message': 'Processing print request...',
+            'message': 'Processing QR print request...',
+            'order_number': order_number
+        })
+
+        # Validate input data
+        if not data or not order_number:
+            emit('print_error', {
+                'error': 'Order number is required',
+                'details': 'Please provide orderNumber or order_number field',
+                'order_number': order_number
+            })
+            return
+
+        # Check if printer is available
+        if not printer.check_printer():
+            logger.error("Printer is not available")
+            emit('print_error', {
+                'error': 'Printer is not available',
+                'details': 'Please check printer connection and USB cable',
+                'order_number': order_number
+            })
+            return
+
+        # Emit progress status
+        emit('print_status', {
+            'status': 'creating',
+            'message': 'Creating QR code...',
+            'order_number': order_number
+        })
+
+        # Emit progress status
+        emit('print_status', {
+            'status': 'printing',
+            'message': 'Sending QR code to printer...',
+            'order_number': order_number
+        })
+
+        # Print QR code only
+        success, message = printer.print_qr_only(order_number)
+        
+        if success:
+            logger.info(f"Successfully printed QR code for order {order_number}")
+            emit('print_success', {
+                'message': 'QR code printed successfully',
+                'order_number': str(order_number),
+                'timestamp': datetime.now().isoformat()
+            })
+        else:
+            logger.error(f"Failed to print QR code: {message}")
+            emit('print_error', {
+                'error': 'Failed to print QR code',
+                'details': message,
+                'order_number': order_number
+            })
+
+    except Exception as e:
+        logger.error(f"Unexpected error in WebSocket QR print request: {str(e)}", exc_info=True)
+        emit('print_error', {
+            'error': 'Internal server error',
+            'details': str(e),
+            'timestamp': datetime.now().isoformat(),
+            'order_number': data.get('orderNumber') if data else 'Unknown'
+        })
+
+@socketio.on('print_receipt')
+def handle_print_receipt(data):
+    """WebSocket handler for full receipt printing"""
+    try:
+        logger.info(f"WebSocket receipt print request received for order: {data.get('orderNumber', 'Unknown')}")
+        
+        # Emit progress status
+        emit('print_status', {
+            'status': 'processing',
+            'message': 'Processing receipt print request...',
             'order_number': data.get('orderNumber')
         })
 
@@ -1837,9 +1970,9 @@ def handle_print_qr(data):
         success, message = printer.print_receipt(receipt)
         
         if success:
-            logger.info(f"Successfully printed receipt for order {sanitized_data['orderNumber']}")
+            logger.info(f"Successfully printed full receipt for order {sanitized_data['orderNumber']}")
             emit('print_success', {
-                'message': 'Receipt printed successfully',
+                'message': 'Full receipt printed successfully',
                 'order_number': sanitized_data['orderNumber'],
                 'timestamp': datetime.now().isoformat()
             })
@@ -1852,7 +1985,7 @@ def handle_print_qr(data):
             })
 
     except Exception as e:
-        logger.error(f"Unexpected error in WebSocket print request: {str(e)}", exc_info=True)
+        logger.error(f"Unexpected error in WebSocket receipt print request: {str(e)}", exc_info=True)
         emit('print_error', {
             'error': 'Internal server error',
             'details': str(e),

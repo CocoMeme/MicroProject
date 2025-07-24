@@ -49,6 +49,7 @@ export default function Scanner() {
   const [isStreaming, setIsStreaming] = useState(true); // Auto-start camera
   const [qrHistory, setQrHistory] = useState([]);
   const [error, setError] = useState(null);
+  const [successMessage, setSuccessMessage] = useState(null);
   const [status, setStatus] = useState({ online: false, camera_running: false });
   const [wsConnected, setWsConnected] = useState(false);
   const [connectionInfo, setConnectionInfo] = useState(null);
@@ -80,12 +81,62 @@ export default function Scanner() {
   const handleQRDetected = useCallback((data) => {
     console.log('QR detected via WebSocket:', data); // Debug log
     
+    // Show success/status message based on QR validation
+    if (data.validation) {
+      if (data.validation.valid && !data.validation.already_scanned) {
+        setSuccessMessage(`✅ ${data.qr_data} scanned successfully!`);
+        setError(null);
+        
+        // Reset camera position after successful scan
+        setTimeout(async () => {
+          console.log('Resetting camera position after successful scan...'); // Debug log
+          try {
+            // Stop camera briefly
+            if (wsConnected) {
+              websocketService.stopCamera();
+            } else {
+              await fetch(`${RASPI_SERVER}/camera/stop`, { method: 'POST' });
+            }
+            
+            // Wait for a short moment
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+            // Restart camera to reset to initial position
+            if (wsConnected) {
+              websocketService.startCamera();
+            } else {
+              await fetch(`${RASPI_SERVER}/camera/start`, { method: 'POST' });
+            }
+            
+            console.log('Camera reset completed'); // Debug log
+          } catch (err) {
+            console.error('Failed to reset camera:', err);
+            // If reset fails, just ensure camera is running
+            setIsStreaming(true);
+          }
+        }, 1000); // 1 second delay to show success message
+        
+      } else if (data.validation.already_scanned) {
+        setSuccessMessage(`⚠️ ${data.qr_data} was already scanned`);
+        setError(null);
+      } else {
+        setError(`❌ ${data.qr_data} not found in orders database`);
+        setSuccessMessage(null);
+      }
+      
+      // Clear messages after 5 seconds
+      setTimeout(() => {
+        setSuccessMessage(null);
+        setError(null);
+      }, 5000);
+    }
+    
     // Immediately refresh QR history when new scan is detected
     getQRHistory();
     
     // Also refresh package information to get latest sensor data
     getPackageInformation();
-  }, []);
+  }, [wsConnected]);
 
   const handleQRHistoryUpdated = useCallback((data) => {
     console.log('QR history updated via WebSocket:', data); // Debug log
@@ -347,8 +398,27 @@ export default function Scanner() {
       // Sort by timestamp (newest first)
       combinedHistory.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
       
-      console.log('Final combined history:', combinedHistory); // Debug log
-      setQrHistory(combinedHistory.slice(0, 20)); // Keep only latest 20
+      // Remove duplicates based on order number - keep only the latest scan for each order
+      const uniqueScans = new Map();
+      const deduplicatedHistory = [];
+      
+      for (const scan of combinedHistory) {
+        // Determine the order identifier (prefer order_number from validation, fallback to qr_data)
+        const orderIdentifier = scan.validation?.order_number || scan.qr_data;
+        
+        // Only keep the first occurrence (which is the latest due to sorting)
+        if (!uniqueScans.has(orderIdentifier)) {
+          uniqueScans.set(orderIdentifier, true);
+          deduplicatedHistory.push(scan);
+        }
+      }
+      
+      console.log('Final combined history (before deduplication):', combinedHistory); // Debug log
+      console.log('Deduplicated history:', deduplicatedHistory); // Debug log
+      const removedCount = combinedHistory.length - deduplicatedHistory.length;
+      console.log(`Removed ${removedCount} duplicate scans`); // Debug log
+      
+      setQrHistory(deduplicatedHistory.slice(0, 20)); // Keep only latest 20 unique scans
       setLastRefresh(new Date()); // Update last refresh time
     } catch (err) {
       console.error('Failed to get QR history:', err);
@@ -542,6 +612,12 @@ export default function Scanner() {
             {!wsConnected && (
               <Alert severity="info" sx={{ mb: 2, fontSize: { xs: '0.875rem', sm: '1rem' } }}>
                 Using HTTP fallback mode - WebSocket connection unavailable
+              </Alert>
+            )}
+
+            {successMessage && (
+              <Alert severity="success" sx={{ mb: 2, fontSize: { xs: '0.875rem', sm: '1rem' } }}>
+                {successMessage}
               </Alert>
             )}
 
@@ -760,8 +836,16 @@ export default function Scanner() {
                                 : scan.qr_data}
                             </Typography>
                             <Chip
-                              label={scan.validation?.valid ? 'Valid' : 'Invalid'}
-                              color={scan.validation?.valid ? 'success' : 'error'}
+                              label={
+                                scan.validation?.valid 
+                                  ? (scan.validation?.already_scanned ? 'Already Scanned' : 'Scanned Successfully') 
+                                  : 'Not Found'
+                              }
+                              color={
+                                scan.validation?.valid 
+                                  ? (scan.validation?.already_scanned ? 'warning' : 'success')
+                                  : 'error'
+                              }
                               size="small"
                             />
                           </Box>
@@ -1178,8 +1262,16 @@ export default function Scanner() {
                           flexWrap: 'wrap'
                         }}>
                           <Chip
-                            label={scan.validation?.valid ? 'Valid' : 'Not Valid'}
-                            color={scan.validation?.valid ? 'success' : 'error'}
+                            label={
+                              scan.validation?.valid 
+                                ? (scan.validation?.already_scanned ? 'Already Scanned' : 'Scanned Successfully') 
+                                : 'Not Found'
+                            }
+                            color={
+                              scan.validation?.valid 
+                                ? (scan.validation?.already_scanned ? 'warning' : 'success')
+                                : 'error'
+                            }
                             size="small"
                           />
                           <Chip
