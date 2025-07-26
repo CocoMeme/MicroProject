@@ -11,6 +11,10 @@ import {
   Chip,
   CircularProgress,
   Alert,
+  Avatar,
+  LinearProgress,
+  Fade,
+  Grow,
 } from '@mui/material';
 import {
   Dashboard as DashboardIcon,
@@ -23,6 +27,10 @@ import {
   Router as RouterIcon,
   Memory as MemoryIcon,
   Thermostat as ThermostatIcon,
+  Speed as SpeedIcon,
+  TrendingUp as TrendingIcon,
+  Assessment as AssessmentIcon,
+  Settings as SettingsIcon,
 } from '@mui/icons-material';
 import { useNotification } from '../components/Notification';
 
@@ -295,214 +303,460 @@ export default function Dashboard() {
   ];
 
   return (
-    <Box sx={{ padding: 3 }}>
-      <Typography variant="h4" gutterBottom sx={{ mb: 4, fontWeight: 600 }}>
-        <DashboardIcon sx={{ mr: 2, fontSize: 'inherit' }} />
-        Dashboard
-      </Typography>
-
-      <Grid container spacing={3}>
-        {/* Top Row - Charts (Grid 1 and Grid 2) */}
-        <Grid item xs={12} md={6}>
-          <Paper 
-            elevation={3}
-            sx={{ 
-              p: 3, 
-              height: '350px',
-              backgroundColor: theme.palette.background.paper,
-              borderRadius: 2,
-            }}
-          >
-            <Typography variant="h5" gutterBottom sx={{ mb: 3, fontWeight: 500 }}>
-              Analytics Chart 1
-            </Typography>
-            
-            <Box sx={{ 
-              height: 'calc(100% - 60px)', 
-              display: 'flex', 
-              alignItems: 'center', 
-              justifyContent: 'center',
-              border: `2px dashed ${theme.palette.divider}`,
-              borderRadius: 1,
-              backgroundColor: theme.palette.grey[50]
+    <Box sx={{ padding: 3, minHeight: '100vh', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' }}>
+      <Fade in timeout={1000}>
+        <Box>
+          <Box sx={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            mb: 4, 
+            p: 3,
+            background: 'rgba(255, 255, 255, 0.1)',
+            backdropFilter: 'blur(10px)',
+            borderRadius: 3,
+            border: '1px solid rgba(255, 255, 255, 0.2)'
+          }}>
+            <Avatar sx={{ 
+              bgcolor: 'primary.main', 
+              mr: 2, 
+              width: 56, 
+              height: 56,
+              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.1)'
             }}>
-              <Box textAlign="center">
-                <Typography variant="h6" color="text.secondary">
-                  Chart 1
-                </Typography>
-                <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                  (Chart placeholder)
-                </Typography>
-              </Box>
-            </Box>
-          </Paper>
-        </Grid>
-
-        <Grid item xs={12} md={6}>
-          <Paper 
-            elevation={3}
-            sx={{ 
-              p: 3, 
-              height: '350px',
-              backgroundColor: theme.palette.background.paper,
-              borderRadius: 2,
-            }}
-          >
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-              <Typography variant="h5" sx={{ fontWeight: 500 }}>
-                Master Control
+              <DashboardIcon sx={{ fontSize: 28 }} />
+            </Avatar>
+            <Box>
+              <Typography variant="h3" sx={{ 
+                fontWeight: 700, 
+                color: 'white',
+                background: 'linear-gradient(45deg, #fff, #e3f2fd)',
+                backgroundClip: 'text',
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent'
+              }}>
+                System Dashboard
+              </Typography>
+              <Typography variant="h6" sx={{ color: 'rgba(255, 255, 255, 0.8)', mt: 1 }}>
+                Monitor and control your QR scanning system
               </Typography>
             </Box>
-            
-            <Box sx={{ 
-              display: 'flex', 
-              flexDirection: 'column', 
-              gap: 1,
-              height: 'calc(100% - 60px)'
-            }}>
-              {controlButtons.map((button, index) => (
-                <Button
-                  key={index}
-                  variant={button.variant}
-                  color={button.color}
-                  size="small"
-                  startIcon={button.loading ? <CircularProgress size={16} /> : button.icon}
-                  fullWidth
-                  disabled={button.loading}
-                  sx={{
-                    flex: 1,
-                    py: 1,
-                    fontSize: '0.8rem',
-                    fontWeight: 500,
-                    borderRadius: 2,
-                    textTransform: 'none',
-                    minHeight: '40px',
-                    maxHeight: '50px',
-                    '&:hover': {
-                      transform: button.loading ? 'none' : 'translateY(-1px)',
-                      boxShadow: button.loading ? 'none' : theme.shadows[3],
-                    },
-                    transition: 'all 0.2s ease-in-out',
-                  }}
-                  onClick={() => {
-                    if (button.action && !button.loading) {
-                      button.action();
-                    } else if (!button.action && !button.loading) {
-                      console.log(`${button.label} clicked`);
+          </Box>
+
+          <Grid container spacing={3}>
+            {/* System Metrics Row */}
+            <Grid item xs={12} md={3}>
+              <Grow in timeout={1000}>
+                <Card sx={{ 
+                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                  color: 'white',
+                  height: '160px',
+                  position: 'relative',
+                  overflow: 'hidden',
+                  '&::before': {
+                    content: '""',
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    background: 'rgba(255, 255, 255, 0.1)',
+                    backdropFilter: 'blur(10px)',
+                  }
+                }}>
+                  <CardContent sx={{ position: 'relative', zIndex: 1, height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <SpeedIcon sx={{ fontSize: 32, opacity: 0.8 }} />
+                      <Typography variant="h3" sx={{ fontWeight: 700 }}>
+                        98%
+                      </Typography>
+                    </Box>
+                    <Box>
+                      <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                        System Health
+                      </Typography>
+                      <LinearProgress 
+                        variant="determinate" 
+                        value={98} 
+                        sx={{ 
+                          mt: 1, 
+                          backgroundColor: 'rgba(255, 255, 255, 0.3)',
+                          '& .MuiLinearProgress-bar': {
+                            backgroundColor: '#4caf50'
+                          }
+                        }} 
+                      />
+                    </Box>
+                  </CardContent>
+                </Card>
+              </Grow>
+            </Grid>
+
+            <Grid item xs={12} md={3}>
+              <Grow in timeout={1200}>
+                <Card sx={{ 
+                  background: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
+                  color: 'white',
+                  height: '160px',
+                  position: 'relative',
+                  overflow: 'hidden',
+                  '&::before': {
+                    content: '""',
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    background: 'rgba(255, 255, 255, 0.1)',
+                    backdropFilter: 'blur(10px)',
+                  }
+                }}>
+                  <CardContent sx={{ position: 'relative', zIndex: 1, height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <TrendingIcon sx={{ fontSize: 32, opacity: 0.8 }} />
+                      <Typography variant="h3" sx={{ fontWeight: 700 }}>
+                        156
+                      </Typography>
+                    </Box>
+                    <Box>
+                      <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                        Scans Today
+                      </Typography>
+                      <Typography variant="body2" sx={{ opacity: 0.8 }}>
+                        +12% from yesterday
+                      </Typography>
+                    </Box>
+                  </CardContent>
+                </Card>
+              </Grow>
+            </Grid>
+
+            <Grid item xs={12} md={3}>
+              <Grow in timeout={1400}>
+                <Card sx={{ 
+                  background: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)',
+                  color: 'white',
+                  height: '160px',
+                  position: 'relative',
+                  overflow: 'hidden',
+                  '&::before': {
+                    content: '""',
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    background: 'rgba(255, 255, 255, 0.1)',
+                    backdropFilter: 'blur(10px)',
+                  }
+                }}>
+                  <CardContent sx={{ position: 'relative', zIndex: 1, height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <AssessmentIcon sx={{ fontSize: 32, opacity: 0.8 }} />
+                      <Typography variant="h3" sx={{ fontWeight: 700 }}>
+                        24h
+                      </Typography>
+                    </Box>
+                    <Box>
+                      <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                        Uptime
+                      </Typography>
+                      <Typography variant="body2" sx={{ opacity: 0.8 }}>
+                        System running smoothly
+                      </Typography>
+                    </Box>
+                  </CardContent>
+                </Card>
+              </Grow>
+            </Grid>
+
+            <Grid item xs={12} md={3}>
+              <Grow in timeout={1600}>
+                <Card sx={{ 
+                  background: 'linear-gradient(135deg, #a8edea 0%, #fed6e3 100%)',
+                  color: '#333',
+                  height: '160px',
+                  position: 'relative',
+                  overflow: 'hidden',
+                  '&::before': {
+                    content: '""',
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    background: 'rgba(255, 255, 255, 0.2)',
+                    backdropFilter: 'blur(10px)',
+                  }
+                }}>
+                  <CardContent sx={{ position: 'relative', zIndex: 1, height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <PrintIcon sx={{ fontSize: 32, opacity: 0.8 }} />
+                      <Typography variant="h3" sx={{ fontWeight: 700 }}>
+                        42
+                      </Typography>
+                    </Box>
+                    <Box>
+                      <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                        Prints Today
+                      </Typography>
+                      <Typography variant="body2" sx={{ opacity: 0.8 }}>
+                        Thermal printer active
+                      </Typography>
+                    </Box>
+                  </CardContent>
+                </Card>
+              </Grow>
+            </Grid>
+
+            {/* Master Control Panel */}
+            <Grid item xs={12} md={8}>
+              <Grow in timeout={1800}>
+                <Paper 
+                  elevation={8}
+                  sx={{ 
+                    p: 4, 
+                    height: '400px',
+                    background: 'rgba(255, 255, 255, 0.95)',
+                    backdropFilter: 'blur(20px)',
+                    borderRadius: 3,
+                    border: '1px solid rgba(255, 255, 255, 0.2)',
+                    position: 'relative',
+                    overflow: 'hidden',
+                    '&::before': {
+                      content: '""',
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      background: 'linear-gradient(135deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.05) 100%)',
+                      backdropFilter: 'blur(10px)',
                     }
                   }}
                 >
-                  {button.loading ? 
-                    (button.label === 'Start System' ? 'Starting...' : 
-                     button.label === 'Stop System' ? 'Stopping...' : 
-                     button.label) : 
-                    button.label
-                  }
-                </Button>
-              ))}
-            </Box>
-          </Paper>
-        </Grid>
-
-        {/* Bottom Row - Raspberry Pi Status (Grid 3) */}
-        <Grid item xs={12}>
-          <Paper 
-            elevation={3}
-            sx={{ 
-              p: 3, 
-              backgroundColor: theme.palette.background.paper,
-              borderRadius: 2,
-            }}
-          >
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-              <Typography variant="h5" sx={{ fontWeight: 500 }}>
-                Raspberry Pi Status
-              </Typography>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                {loading && <CircularProgress size={20} />}
-                {lastUpdated && (
-                  <Typography variant="caption" color="text.secondary">
-                    Last updated: {lastUpdated}
-                  </Typography>
-                )}
-              </Box>
-            </Box>
-            
-            {raspiStatus?.error ? (
-              <Alert severity="error" sx={{ mb: 2 }}>
-                Failed to connect to Raspberry Pi: {raspiStatus.error}
-              </Alert>
-            ) : (
-              <Grid container spacing={2}>
-                {raspiStatus && Object.entries(raspiStatus).map(([key, value], index) => {
-                  if (key === 'error') return null;
-                  
-                  const isSystemInfo = typeof value === 'object' && value !== null;
-                  const displayValue = isSystemInfo ? JSON.stringify(value, null, 2) : String(value);
-                  const status = isSystemInfo ? 
-                    (value.connected !== undefined ? value.connected : 'unknown') : 
-                    value;
-
-                  return (
-                    <Grid item xs={12} sm={6} md={4} lg={3} key={index}>
-                      <Card sx={{ height: '100%', minHeight: '120px' }}>
-                        <CardContent>
-                          <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-                            {getStatusIcon(key.toLowerCase(), status)}
-                            <Typography variant="h6" sx={{ ml: 1, textTransform: 'capitalize' }}>
-                              {key.replace(/_/g, ' ')}
-                            </Typography>
-                          </Box>
-                          
-                          <Chip 
-                            label={isSystemInfo ? 
-                              (value.connected !== undefined ? 
-                                (value.connected ? 'Connected' : 'Disconnected') : 
-                                'Status Unknown'
-                              ) : 
-                              displayValue
+                  <Box sx={{ position: 'relative', zIndex: 1, height: '100%' }}>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 4 }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                        <Avatar sx={{ bgcolor: 'primary.main', mr: 2, width: 48, height: 48 }}>
+                          <SettingsIcon />
+                        </Avatar>
+                        <Box>
+                          <Typography variant="h5" sx={{ fontWeight: 700, color: 'text.primary' }}>
+                            Master Control Panel
+                          </Typography>
+                          <Typography variant="body2" color="text.secondary">
+                            System operations and monitoring
+                          </Typography>
+                        </Box>
+                      </Box>
+                      {loading && <CircularProgress size={24} />}
+                    </Box>
+                    
+                    <Grid container spacing={3} sx={{ height: 'calc(100% - 100px)' }}>
+                      {controlButtons.map((button, index) => (
+                        <Grid item xs={12} sm={6} key={index}>
+                          <Button
+                            variant={button.variant}
+                            color={button.color}
+                            size="large"
+                            startIcon={button.loading ? <CircularProgress size={20} /> : button.icon}
+                            fullWidth
+                            disabled={button.loading}
+                            sx={{
+                              height: '80px',
+                              fontSize: '1.1rem',
+                              fontWeight: 600,
+                              borderRadius: 3,
+                              textTransform: 'none',
+                              background: button.color === 'success' 
+                                ? 'linear-gradient(135deg, #4caf50 0%, #81c784 100%)'
+                                : 'linear-gradient(135deg, #f44336 0%, #e57373 100%)',
+                              boxShadow: '0 4px 20px rgba(0, 0, 0, 0.1)',
+                              '&:hover': {
+                                transform: button.loading ? 'none' : 'translateY(-2px)',
+                                boxShadow: button.loading ? 'none' : '0 8px 30px rgba(0, 0, 0, 0.15)',
+                              },
+                              transition: 'all 0.3s ease-in-out',
+                            }}
+                            onClick={() => {
+                              if (button.action && !button.loading) {
+                                button.action();
+                              } else if (!button.action && !button.loading) {
+                                console.log(`${button.label} clicked`);
+                              }
+                            }}
+                          >
+                            {button.loading ? 
+                              (button.label === 'Start System' ? 'Starting System...' : 
+                               button.label === 'Stop System' ? 'Stopping System...' : 
+                               button.label) : 
+                              button.label
                             }
-                            color={getStatusColor(status)}
-                            size="small"
-                            sx={{ mb: 1 }}
-                          />
-                          
-                          {isSystemInfo && (
-                            <Typography variant="body2" color="text.secondary" sx={{ 
-                              fontSize: '0.75rem',
-                              fontFamily: 'monospace',
-                              whiteSpace: 'pre-wrap',
-                              maxHeight: '60px',
-                              overflow: 'auto'
-                            }}>
-                              {Object.entries(value).map(([k, v]) => `${k}: ${v}`).join('\n')}
-                            </Typography>
-                          )}
-                        </CardContent>
-                      </Card>
+                          </Button>
+                        </Grid>
+                      ))}
+                      
+                      {/* Quick Actions */}
+                      <Grid item xs={12}>
+                        <Box sx={{ mt: 2, p: 2, backgroundColor: 'rgba(0, 0, 0, 0.02)', borderRadius: 2 }}>
+                          <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
+                            Quick Actions
+                          </Typography>
+                          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                            <Chip 
+                              icon={<CameraIcon />} 
+                              label="Camera Status" 
+                              variant="outlined" 
+                              size="small"
+                              sx={{ borderRadius: 2 }}
+                            />
+                            <Chip 
+                              icon={<PrintIcon />} 
+                              label="Printer Ready" 
+                              variant="outlined" 
+                              size="small"
+                              sx={{ borderRadius: 2 }}
+                            />
+                            <Chip 
+                              icon={<RouterIcon />} 
+                              label="Network OK" 
+                              variant="outlined" 
+                              size="small"
+                              sx={{ borderRadius: 2 }}
+                            />
+                          </Box>
+                        </Box>
+                      </Grid>
                     </Grid>
-                  );
-                })}
-                
-                {!raspiStatus && !loading && (
-                  <Grid item xs={12}>
-                    <Card>
-                      <CardContent sx={{ textAlign: 'center', py: 4 }}>
-                        <Typography variant="h6" color="text.secondary">
-                          No status data available
+                  </Box>
+                </Paper>
+              </Grow>
+            </Grid>
+
+            {/* System Status Panel */}
+            <Grid item xs={12} md={4}>
+              <Grow in timeout={2000}>
+                <Paper 
+                  elevation={8}
+                  sx={{ 
+                    p: 4, 
+                    height: '400px',
+                    background: 'rgba(255, 255, 255, 0.95)',
+                    backdropFilter: 'blur(20px)',
+                    borderRadius: 3,
+                    border: '1px solid rgba(255, 255, 255, 0.2)',
+                    position: 'relative',
+                    overflow: 'hidden',
+                    '&::before': {
+                      content: '""',
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      background: 'linear-gradient(135deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.05) 100%)',
+                      backdropFilter: 'blur(10px)',
+                    }
+                  }}
+                >
+                  <Box sx={{ position: 'relative', zIndex: 1, height: '100%' }}>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                        <Avatar sx={{ bgcolor: 'success.main', mr: 2, width: 48, height: 48 }}>
+                          <CheckCircleIcon />
+                        </Avatar>
+                        <Box>
+                          <Typography variant="h6" sx={{ fontWeight: 700, color: 'text.primary' }}>
+                            System Status
+                          </Typography>
+                          <Typography variant="body2" color="text.secondary">
+                            Real-time monitoring
+                          </Typography>
+                        </Box>
+                      </Box>
+                      {loading && <CircularProgress size={20} />}
+                      {lastUpdated && (
+                        <Typography variant="caption" color="text.secondary">
+                          {lastUpdated}
                         </Typography>
-                        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                          Click "Refresh Data" to fetch the latest status
-                        </Typography>
-                      </CardContent>
-                    </Card>
-                  </Grid>
-                )}
-              </Grid>
-            )}
-          </Paper>
-        </Grid>
-      </Grid>
+                      )}
+                    </Box>
+                    
+                    {raspiStatus?.error ? (
+                      <Alert severity="error" sx={{ mb: 2, borderRadius: 2 }}>
+                        Failed to connect: {raspiStatus.error}
+                      </Alert>
+                    ) : (
+                      <Box sx={{ height: 'calc(100% - 80px)', overflowY: 'auto' }}>
+                        {raspiStatus && Object.entries(raspiStatus).map(([key, value], index) => {
+                          if (key === 'error') return null;
+                          
+                          const isSystemInfo = typeof value === 'object' && value !== null;
+                          const status = isSystemInfo ? 
+                            (value.connected !== undefined ? value.connected : 'unknown') : 
+                            value;
+
+                          return (
+                            <Card key={index} sx={{ mb: 2, backgroundColor: 'rgba(0, 0, 0, 0.02)', border: 'none' }}>
+                              <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+                                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                  <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                                    {getStatusIcon(key.toLowerCase(), status)}
+                                    <Typography variant="subtitle2" sx={{ ml: 1, textTransform: 'capitalize', fontWeight: 600 }}>
+                                      {key.replace(/_/g, ' ')}
+                                    </Typography>
+                                  </Box>
+                                  
+                                  <Chip 
+                                    label={isSystemInfo ? 
+                                      (value.connected !== undefined ? 
+                                        (value.connected ? 'Online' : 'Offline') : 
+                                        'Unknown'
+                                      ) : 
+                                      String(value)
+                                    }
+                                    color={getStatusColor(status)}
+                                    size="small"
+                                    sx={{ borderRadius: 2, fontWeight: 500 }}
+                                  />
+                                </Box>
+                                
+                                {isSystemInfo && (
+                                  <Typography variant="caption" color="text.secondary" sx={{ 
+                                    mt: 1,
+                                    display: 'block',
+                                    fontFamily: 'monospace',
+                                    fontSize: '0.7rem'
+                                  }}>
+                                    {Object.entries(value).slice(0, 2).map(([k, v]) => `${k}: ${v}`).join(' | ')}
+                                  </Typography>
+                                )}
+                              </CardContent>
+                            </Card>
+                          );
+                        })}
+                        
+                        {!raspiStatus && !loading && (
+                          <Card sx={{ textAlign: 'center', py: 4, backgroundColor: 'rgba(0, 0, 0, 0.02)' }}>
+                            <CardContent>
+                              <Typography variant="h6" color="text.secondary">
+                                No Status Data
+                              </Typography>
+                              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                                System information unavailable
+                              </Typography>
+                            </CardContent>
+                          </Card>
+                        )}
+                      </Box>
+                    )}
+                  </Box>
+                </Paper>
+              </Grow>
+            </Grid>
+          </Grid>
+        </Box>
+      </Fade>
       
       {/* Custom Notifications */}
       <NotificationContainer />

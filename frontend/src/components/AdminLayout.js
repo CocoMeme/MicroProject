@@ -14,7 +14,6 @@ import AdminSidebar from './AdminSidebar';
 import Dashboard from '../pages/Dashboard';
 import Orders from '../pages/Orders';
 import Scanner from '../pages/Scanner';
-import MQTTTest from '../pages/MQTTTest';
 
 const drawerWidth = 280;
 
@@ -79,7 +78,6 @@ export default function AdminLayout() {
           <Route path="dashboard" element={<Dashboard />} />
           <Route path="orders" element={<Orders />} />
           <Route path="scanner" element={<Scanner />} />
-          <Route path="mqtt-test" element={<MQTTTest />} />
         </Routes>
       </Box>
     </Box>

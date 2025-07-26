@@ -12,6 +12,7 @@ import requests
 import requests
 import os
 import os
+import re
 
 # Configure logging with improved format and separate levels
 logging.basicConfig(
@@ -93,7 +94,22 @@ class MQTTListener:
             # Support both /loadcell and esp32/loadcell/data topics
             if topic.lower() in ['/loadcell', 'esp32/loadcell/data']:
                 try:
-                    weight = float(message)
+                    # Extract weight value from message - handle both raw numbers and formatted messages
+                    weight = None
+                    
+                    # Check if message contains formatted weight (e.g., "📦 Final Weight: 418.6 g")
+                    if "Final Weight:" in message:
+                        # Extract the numeric value from formatted message
+                        weight_match = re.search(r'Final Weight:\s*([0-9]+\.?[0-9]*)', message)
+                        if weight_match:
+                            weight = float(weight_match.group(1))
+                            logger.info(f"LOADCELL: Parsed formatted weight: {weight}g from message: {message}")
+                    else:
+                        # Try to parse as direct numeric value
+                        weight = float(message)
+                    
+                    if weight is None:
+                        raise ValueError(f"Could not extract weight from: {message}")
                     
                     # Apply spam filtering if enabled
                     if LOADCELL_SPAM_FILTER['enabled']:
@@ -125,8 +141,8 @@ class MQTTListener:
                         logger.info(f"STEP 3 - LOADCELL: Weight captured {weight}kg")
                         store_weight_data_in_db()
                     
-                except ValueError:
-                    logger.warning(f"Invalid weight value received: {message}")
+                except ValueError as e:
+                    logger.warning(f"Invalid weight value received: {message} - Error: {e}")
             
             # Handle box dimensions data (Step 5: Size Sensor gets dimensions after grabber moves box)
             elif topic.lower() == '/box/results':
@@ -222,8 +238,48 @@ class MQTTListener:
             # Handle motor status messages (Step 2: Object detection triggers loadcell)
             elif topic.lower() == 'esp32/motor/status':
                 try:
-                    # Check for object detection message (updated pattern)
-                    if '📍 Object detected! Motor B paused' in message:
+                    # Check for Motor A stopped by IR A message
+                    if 'Motor A stopped by IR A' in message:
+                        logger.info(f"STEP 2 - MOTOR STATUS: Motor A stopped by IR A - Starting loadcell")
+                        
+                        # Send immediate loadcell request when Motor A is stopped by IR A
+                        def send_loadcell_request_motor_a():
+                            try:
+                                logger.debug("Motor A stopped by IR A - Sending loadcell start request to ESP32...")
+                                
+                                # Send loadcell request via MQTT
+                                success = mqtt_listener.publish_message('esp32/loadcell/request', 'start')
+                                if success:
+                                    logger.info("SUCCESS: Loadcell START request sent due to Motor A stopped by IR A (esp32/loadcell/request > start)")
+                                    
+                                    # Emit workflow progress via WebSocket
+                                    socketio.emit('workflow_progress', {
+                                        'step': 2,
+                                        'status': 'motor_a_stopped_ir_a',
+                                        'message': 'Motor A stopped by IR A, loadcell reading requested',
+                                        'timestamp': datetime.now().isoformat(),
+                                        'triggered_by': 'motor_a_ir_a'
+                                    })
+                                else:
+                                    logger.error("FAILED: Could not send loadcell request after Motor A stopped by IR A")
+                                    
+                            except Exception as e:
+                                logger.error(f"Error sending loadcell request for Motor A IR A: {e}")
+                        
+                        # Start request in background thread to not block MQTT processing
+                        request_thread = threading.Thread(target=send_loadcell_request_motor_a, daemon=True)
+                        request_thread.start()
+                        
+                        # Emit immediate motor status via WebSocket
+                        socketio.emit('workflow_progress', {
+                            'step': 2,
+                            'status': 'motor_a_stopped',
+                            'message': 'Motor A stopped by IR A - Requesting weight measurement',
+                            'timestamp': datetime.now().isoformat()
+                        })
+                    
+                    # Check for object detection message (existing Motor B logic)
+                    elif '📍 Object detected! Motor B paused' in message:
                         logger.info(f"STEP 2 - MOTOR STATUS: Object detected, motor paused")
                         
                         # Send immediate loadcell request (no delay needed)
@@ -926,7 +982,18 @@ def status():
     """General status endpoint"""
     try:
         printer_status = "available" if printer.check_printer() else "unavailable"
-        camera_status = camera.get_status()
+        camera_data = camera.get_status()
+        
+        # Simplify camera status for frontend
+        if camera_data.get('initialization_error'):
+            camera_status = "error"
+        elif not camera_data.get('has_camera'):
+            camera_status = "unavailable"
+        elif camera_data.get('camera_running'):
+            camera_status = "running"
+        else:
+            camera_status = "available"
+            
         mqtt_status = mqtt_listener.get_status()
         return jsonify({
             "status": "running",
@@ -997,7 +1064,7 @@ def start_motor():
         # Publish start command to ESP32 - This will start the motor system
         # The ESP32 will then autonomously detect objects with its IR sensor
         # and send IR trigger messages back to this server
-        success = mqtt_listener.publish_message('esp32/motor/request', 'start')
+        success = mqtt_listener.publish_message('esp32/motor/request', 'startA')
         
         if success:
             logger.info("Motor system started Waiting For IR Sensor Detection")
@@ -1173,7 +1240,18 @@ def after_request(response):
 def home():
     """Health check endpoint"""
     printer_status = "available" if printer.check_printer() else "unavailable"
-    camera_status = camera.get_status()
+    camera_data = camera.get_status()
+    
+    # Simplify camera status for frontend
+    if camera_data.get('initialization_error'):
+        camera_status = "error"
+    elif not camera_data.get('has_camera'):
+        camera_status = "unavailable"
+    elif camera_data.get('camera_running'):
+        camera_status = "running"
+    else:
+        camera_status = "available"
+        
     mqtt_status = mqtt_listener.get_status()
     return jsonify({
         "status": "running",

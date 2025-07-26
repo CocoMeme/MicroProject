@@ -24,7 +24,6 @@ const menuItems = [
   { text: 'Dashboard', icon: <DashboardIcon />, path: '/admin/dashboard' },
   { text: 'Orders', icon: <OrdersIcon />, path: '/admin/orders' },
   { text: 'Scanner', icon: <ScannerIcon />, path: '/admin/scanner' },
-  { text: 'MQTT Test', icon: <MQTTIcon />, path: '/admin/mqtt-test' },
 ];
 
 export default function AdminSidebar({ open, onDrawerToggle }) {

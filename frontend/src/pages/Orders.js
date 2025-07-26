@@ -20,13 +20,27 @@ import {
   useMediaQuery,
   Card,
   CardContent,
-  Grid
+  Grid,
+  Avatar,
+  Fade,
+  Grow,
+  IconButton,
+  Tooltip,
+  LinearProgress,
 } from '@mui/material';
 import { 
   QrCode2 as QrCodeIcon, 
   Print as PrintIcon,
   Wifi as WifiIcon,
-  WifiOff as WifiOffIcon 
+  WifiOff as WifiOffIcon,
+  ShoppingCart as OrdersIcon,
+  Person as PersonIcon,
+  AttachMoney as MoneyIcon,
+  CalendarToday as CalendarIcon,
+  Phone as PhoneIcon,
+  Email as EmailIcon,
+  LocationOn as LocationIcon,
+  Refresh as RefreshIcon,
 } from '@mui/icons-material';
 import axios from 'axios';
 import raspberryPiWebSocketService from '../services/raspberryPiWebSocketService';
@@ -85,7 +99,6 @@ const Orders = () => {
 
   // WebSocket event handlers
   const handlePrintStatus = (data) => {
-    // Just log the status without showing modal
     console.log('Print status:', data.message);
   };
 
@@ -102,10 +115,9 @@ const Orders = () => {
       severity: 'success'
     });
 
-    // Reload the page after successful printing
     setTimeout(() => {
       window.location.reload();
-    }, 1000); // Wait 1 second to show the success message
+    }, 1000);
   };
 
   const handlePrintError = (data) => {
@@ -143,7 +155,6 @@ const Orders = () => {
   };
 
   const handlePrintQRCode = async (orderId) => {
-    // Prevent multiple simultaneous prints for the same order
     if (printingOrders.has(orderId)) {
       setSnackbar({
         open: true,
@@ -153,7 +164,6 @@ const Orders = () => {
       return;
     }
 
-    // Find the order data
     const order = orders.find(o => o.id === orderId);
     if (!order) {
       setSnackbar({
@@ -164,12 +174,10 @@ const Orders = () => {
       return;
     }
 
-    // Add to printing set
     setPrintingOrders(prev => new Set([...prev, orderId]));
 
     try {
       if (wsConnected) {
-        // Use WebSocket for better performance on slow connections
         console.log('Using WebSocket for printing');
         
         const orderData = {
@@ -186,16 +194,14 @@ const Orders = () => {
         await raspberryPiWebSocketService.printQRCode(orderData);
         
       } else {
-        // Fallback to HTTP
         console.log('Using HTTP fallback for printing');
         
         const response = await axios.post(`${process.env.REACT_APP_API_ENDPOINT || 'http://192.168.100.61:5000/api'}/print-qr`, {
           orderId: orderId.toString()
         }, {
-          timeout: 15000 // Increased timeout for Raspberry Pi browser
+          timeout: 15000
         });
         
-        // Remove from printing set on HTTP success
         setPrintingOrders(prev => {
           const newSet = new Set(prev);
           newSet.delete(orderId);
@@ -208,15 +214,13 @@ const Orders = () => {
           severity: 'success'
         });
 
-        // Reload the page after successful HTTP printing
         setTimeout(() => {
           window.location.reload();
-        }, 1000); // Wait 1 second to show the success message
+        }, 1000);
       }
     } catch (error) {
       console.error('Error printing QR code:', error);
       
-      // Remove from printing set on error
       setPrintingOrders(prev => {
         const newSet = new Set(prev);
         newSet.delete(orderId);
@@ -263,201 +267,525 @@ const Orders = () => {
   }
 
   return (
-    <Box sx={{ p: { xs: 2, md: 3 } }}>
-      <Box sx={{ 
-        display: 'flex', 
-        justifyContent: 'space-between', 
-        alignItems: 'center', 
-        mb: 2,
-        flexDirection: { xs: 'column', sm: 'row' },
-        gap: { xs: 2, sm: 0 }
-      }}>
-        <Typography variant="h4" sx={{ fontSize: { xs: '1.5rem', md: '2rem' } }}>
-          Orders
-        </Typography>
-        
-        {/* Connection Status */}
-        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
-          {connectingWs && (
-            <Chip 
-              icon={<CircularProgress size={16} />}
-              label="Connecting..." 
-              size="small" 
-              color="info"
-            />
-          )}
-          <Chip
-            icon={wsConnected ? <WifiIcon /> : <WifiOffIcon />}
-            label={wsConnected ? 'WebSocket Ready' : 'HTTP Fallback'}
-            color={wsConnected ? 'success' : 'warning'}
-            size="small"
-          />
-          <Chip
-            icon={<PrintIcon />}
-            label={`${printingOrders.size} printing`}
-            color={printingOrders.size > 0 ? 'primary' : 'default'}
-            size="small"
-          />
-        </Stack>
-      </Box>
-      
-      {/* Mobile Card View */}
-      {isMobile ? (
+    <Box sx={{ 
+      p: { xs: 2, md: 3 }, 
+      minHeight: '100vh',
+      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
+    }}>
+      <Fade in timeout={1000}>
         <Box>
-          <Grid container spacing={2}>
-            {orders
-              .slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage)
-              .map((order) => (
-                <Grid item xs={12} key={order.id}>
-                  <Card>
-                    <CardContent>
-                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
-                        <Typography variant="h6" sx={{ fontSize: '1rem' }}>
-                          {order.order_number}
-                        </Typography>
-                        <Button
-                          variant="contained"
-                          size="small"
-                          startIcon={printingOrders.has(order.id) ? <CircularProgress size={16} /> : <QrCodeIcon />}
-                          onClick={() => handlePrintQRCode(order.id)}
-                          disabled={printingOrders.has(order.id)}
-                          color={printingOrders.has(order.id) ? "secondary" : "primary"}
-                        >
-                          {printingOrders.has(order.id) ? 'Printing...' : 'Print QR'}
-                        </Button>
-                      </Box>
-                      
-                      <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                        <strong>Customer:</strong> {order.customer_name}
+          {/* Header Section */}
+          <Box sx={{ 
+            display: 'flex', 
+            justifyContent: 'space-between', 
+            alignItems: 'center', 
+            mb: 4,
+            p: 3,
+            background: 'rgba(255, 255, 255, 0.1)',
+            backdropFilter: 'blur(10px)',
+            borderRadius: 3,
+            border: '1px solid rgba(255, 255, 255, 0.2)',
+            flexDirection: { xs: 'column', sm: 'row' },
+            gap: { xs: 2, sm: 0 }
+          }}>
+            <Box sx={{ display: 'flex', alignItems: 'center' }}>
+              <Avatar sx={{ 
+                bgcolor: 'primary.main', 
+                mr: 2, 
+                width: 56, 
+                height: 56,
+                boxShadow: '0 8px 32px rgba(0, 0, 0, 0.1)'
+              }}>
+                <OrdersIcon sx={{ fontSize: 28 }} />
+              </Avatar>
+              <Box>
+                <Typography variant="h3" sx={{ 
+                  fontWeight: 700, 
+                  color: 'white',
+                  background: 'linear-gradient(45deg, #fff, #e3f2fd)',
+                  backgroundClip: 'text',
+                  WebkitBackgroundClip: 'text',
+                  WebkitTextFillColor: 'transparent',
+                  fontSize: { xs: '1.8rem', md: '3rem' }
+                }}>
+                  Order Management
+                </Typography>
+                <Typography variant="h6" sx={{ color: 'rgba(255, 255, 255, 0.8)', mt: 1 }}>
+                  Track and print order receipts
+                </Typography>
+              </Box>
+            </Box>
+            
+            {/* Connection Status & Actions */}
+            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+              <Tooltip title="Refresh orders">
+                <IconButton 
+                  onClick={fetchOrders}
+                  sx={{ 
+                    color: 'white',
+                    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+                    '&:hover': { backgroundColor: 'rgba(255, 255, 255, 0.2)' }
+                  }}
+                >
+                  <RefreshIcon />
+                </IconButton>
+              </Tooltip>
+              
+              {connectingWs && (
+                <Chip 
+                  icon={<CircularProgress size={16} />}
+                  label="Connecting..." 
+                  size="small" 
+                  sx={{ 
+                    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+                    color: 'white'
+                  }}
+                />
+              )}
+              <Chip
+                icon={wsConnected ? <WifiIcon /> : <WifiOffIcon />}
+                label={wsConnected ? 'WebSocket Ready' : 'HTTP Fallback'}
+                color={wsConnected ? 'success' : 'warning'}
+                size="small"
+                sx={{ 
+                  backgroundColor: wsConnected ? 'rgba(76, 175, 80, 0.1)' : 'rgba(255, 152, 0, 0.1)',
+                  backdropFilter: 'blur(10px)'
+                }}
+              />
+              <Chip
+                icon={<PrintIcon />}
+                label={`${printingOrders.size} printing`}
+                color={printingOrders.size > 0 ? 'primary' : 'default'}
+                size="small"
+                sx={{ 
+                  backgroundColor: 'rgba(255, 255, 255, 0.1)',
+                  backdropFilter: 'blur(10px)',
+                  color: 'white'
+                }}
+              />
+            </Stack>
+          </Box>
+
+          {/* Stats Cards */}
+          <Grid container spacing={3} sx={{ mb: 4 }}>
+            <Grid item xs={12} sm={6} md={3}>
+              <Grow in timeout={1000}>
+                <Card sx={{ 
+                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                  color: 'white',
+                  position: 'relative',
+                  overflow: 'hidden',
+                  '&::before': {
+                    content: '""',
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    background: 'rgba(255, 255, 255, 0.1)',
+                    backdropFilter: 'blur(10px)',
+                  }
+                }}>
+                  <CardContent sx={{ position: 'relative', zIndex: 1 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <OrdersIcon sx={{ fontSize: 32, opacity: 0.8 }} />
+                      <Typography variant="h4" sx={{ fontWeight: 700 }}>
+                        {orders.length}
                       </Typography>
-                      
-                      <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                        <strong>Contact:</strong> {order.contact_number || 'N/A'}
+                    </Box>
+                    <Typography variant="h6" sx={{ fontWeight: 600, mt: 1 }}>
+                      Total Orders
+                    </Typography>
+                  </CardContent>
+                </Card>
+              </Grow>
+            </Grid>
+
+            <Grid item xs={12} sm={6} md={3}>
+              <Grow in timeout={1200}>
+                <Card sx={{ 
+                  background: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
+                  color: 'white',
+                  position: 'relative',
+                  overflow: 'hidden',
+                  '&::before': {
+                    content: '""',
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    background: 'rgba(255, 255, 255, 0.1)',
+                    backdropFilter: 'blur(10px)',
+                  }
+                }}>
+                  <CardContent sx={{ position: 'relative', zIndex: 1 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <PrintIcon sx={{ fontSize: 32, opacity: 0.8 }} />
+                      <Typography variant="h4" sx={{ fontWeight: 700 }}>
+                        {printingOrders.size}
                       </Typography>
-                      
-                      <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                        <strong>Product:</strong> {order.product_name}
+                    </Box>
+                    <Typography variant="h6" sx={{ fontWeight: 600, mt: 1 }}>
+                      Printing Queue
+                    </Typography>
+                  </CardContent>
+                </Card>
+              </Grow>
+            </Grid>
+
+            <Grid item xs={12} sm={6} md={3}>
+              <Grow in timeout={1400}>
+                <Card sx={{ 
+                  background: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)',
+                  color: 'white',
+                  position: 'relative',
+                  overflow: 'hidden',
+                  '&::before': {
+                    content: '""',
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    background: 'rgba(255, 255, 255, 0.1)',
+                    backdropFilter: 'blur(10px)',
+                  }
+                }}>
+                  <CardContent sx={{ position: 'relative', zIndex: 1 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <MoneyIcon sx={{ fontSize: 32, opacity: 0.8 }} />
+                      <Typography variant="h4" sx={{ fontWeight: 700 }}>
+                        ₱{orders.reduce((sum, order) => sum + (order.amount || 0), 0).toLocaleString()}
                       </Typography>
-                      
-                      <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                        <strong>Amount:</strong> ₱{parseFloat(order.amount || 0).toFixed(2)}
+                    </Box>
+                    <Typography variant="h6" sx={{ fontWeight: 600, mt: 1 }}>
+                      Total Revenue
+                    </Typography>
+                  </CardContent>
+                </Card>
+              </Grow>
+            </Grid>
+
+            <Grid item xs={12} sm={6} md={3}>
+              <Grow in timeout={1600}>
+                <Card sx={{ 
+                  background: 'linear-gradient(135deg, #a8edea 0%, #fed6e3 100%)',
+                  color: '#333',
+                  position: 'relative',
+                  overflow: 'hidden',
+                  '&::before': {
+                    content: '""',
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    background: 'rgba(255, 255, 255, 0.2)',
+                    backdropFilter: 'blur(10px)',
+                  }
+                }}>
+                  <CardContent sx={{ position: 'relative', zIndex: 1 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <CalendarIcon sx={{ fontSize: 32, opacity: 0.8 }} />
+                      <Typography variant="h4" sx={{ fontWeight: 700 }}>
+                        {new Date().toLocaleDateString()}
                       </Typography>
-                      
-                      <Typography variant="body2" color="text.secondary">
-                        <strong>Date:</strong> {new Date(order.date).toLocaleDateString('en-US', {
-                          year: 'numeric',
-                          month: 'short',
-                          day: 'numeric',
-                        })}
-                      </Typography>
-                    </CardContent>
-                  </Card>
-                </Grid>
-              ))}
+                    </Box>
+                    <Typography variant="h6" sx={{ fontWeight: 600, mt: 1 }}>
+                      Today's Date
+                    </Typography>
+                  </CardContent>
+                </Card>
+              </Grow>
+            </Grid>
           </Grid>
-          
-          {orders.length === 0 && (
-            <Paper sx={{ p: 3, textAlign: 'center' }}>
-              <Typography variant="body1" color="text.secondary">
-                No orders found
-              </Typography>
-            </Paper>
-          )}
-        </Box>
-      ) : (
-        /* Desktop Table View */
-        <Paper sx={{ width: '100%', overflow: 'hidden' }}>
-          <TableContainer sx={{ maxHeight: 440 }}>
-            <Table stickyHeader>
-              <TableHead>
-                <TableRow>
-                  <TableCell>Order Number</TableCell>
-                  <TableCell>Customer Name</TableCell>
-                  <TableCell>Contact</TableCell>
-                  <TableCell>Product</TableCell>
-                  <TableCell>Amount</TableCell>
-                  <TableCell>Date</TableCell>
-                  <TableCell align="right">Actions</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {orders
-                  .slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage)
-                  .map((order) => (
-                    <TableRow hover key={order.id}>
-                      <TableCell>{order.order_number}</TableCell>
-                      <TableCell>{order.customer_name}</TableCell>
-                      <TableCell>{order.contact_number || 'N/A'}</TableCell>
-                      <TableCell>{order.product_name}</TableCell>
-                      <TableCell>₱{parseFloat(order.amount || 0).toFixed(2)}</TableCell>
-                      <TableCell>
-                        {new Date(order.date).toLocaleDateString('en-US', {
-                          year: 'numeric',
-                          month: 'short',
-                          day: 'numeric',
-                        })}
-                      </TableCell>
-                      <TableCell align="right">
-                        <Stack direction="row" spacing={1} justifyContent="flex-end">
+
+          {/* Orders Table */}
+          <Grow in timeout={1800}>
+            <Paper 
+              elevation={8}
+              sx={{ 
+                background: 'rgba(255, 255, 255, 0.95)',
+                backdropFilter: 'blur(20px)',
+                borderRadius: 3,
+                border: '1px solid rgba(255, 255, 255, 0.2)',
+                overflow: 'hidden'
+              }}
+            >
+              {isMobile ? (
+                // Mobile Card View
+                <Box sx={{ p: 2 }}>
+                  {orders.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage).map((order) => (
+                    <Card key={order.id} sx={{ mb: 2, position: 'relative' }}>
+                      <CardContent sx={{ p: 3 }}>
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
+                          <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                            <Avatar sx={{ bgcolor: 'primary.main', mr: 2, width: 40, height: 40 }}>
+                              <PersonIcon />
+                            </Avatar>
+                            <Box>
+                              <Typography variant="h6" sx={{ fontWeight: 600, color: 'primary.main' }}>
+                                {order.order_number}
+                              </Typography>
+                              <Typography variant="body2" color="text.secondary">
+                                Order #{order.id}
+                              </Typography>
+                            </Box>
+                          </Box>
                           <Button
                             variant="contained"
+                            color="primary"
                             size="small"
-                            startIcon={printingOrders.has(order.id) ? <CircularProgress size={16} /> : <QrCodeIcon />}
+                            startIcon={printingOrders.has(order.id) ? <CircularProgress size={16} /> : <PrintIcon />}
                             onClick={() => handlePrintQRCode(order.id)}
                             disabled={printingOrders.has(order.id)}
-                            color={printingOrders.has(order.id) ? "secondary" : "primary"}
+                            sx={{
+                              minWidth: '100px',
+                              borderRadius: 2,
+                              textTransform: 'none',
+                              fontWeight: 600
+                            }}
                           >
-                            {printingOrders.has(order.id) ? 'Printing...' : 'Print QR'}
+                            {printingOrders.has(order.id) ? 'Printing...' : 'Print'}
                           </Button>
-                        </Stack>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                {orders.length === 0 && (
-                  <TableRow>
-                    <TableCell colSpan={7} align="center">
-                      No orders found
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
-          </TableContainer>
-        </Paper>
-      )}
-      
-      {/* Pagination */}
-      <TablePagination
-        rowsPerPageOptions={[10, 25, 100]}
-        component="div"
-        count={orders.length}
-        rowsPerPage={rowsPerPage}
-        page={page}
-        onPageChange={handleChangePage}
-        onRowsPerPageChange={handleChangeRowsPerPage}
-        sx={{ 
-          mt: 2,
-          '& .MuiTablePagination-toolbar': {
-            flexDirection: { xs: 'column', sm: 'row' },
-            alignItems: { xs: 'stretch', sm: 'center' },
-            gap: { xs: 1, sm: 0 }
-          },
-          '& .MuiTablePagination-spacer': {
-            display: { xs: 'none', sm: 'block' }
-          }
-        }}
-      />
+                        </Box>
 
+                        <Grid container spacing={2}>
+                          <Grid item xs={12}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                              <PersonIcon sx={{ mr: 1, color: 'text.secondary', fontSize: 18 }} />
+                              <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                                {order.customer_name}
+                              </Typography>
+                            </Box>
+                          </Grid>
+                          
+                          <Grid item xs={12}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                              <QrCodeIcon sx={{ mr: 1, color: 'text.secondary', fontSize: 18 }} />
+                              <Typography variant="body2">
+                                {order.product_name}
+                              </Typography>
+                            </Box>
+                          </Grid>
+
+                          <Grid item xs={6}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                              <MoneyIcon sx={{ mr: 1, color: 'success.main', fontSize: 18 }} />
+                              <Typography variant="body2" sx={{ fontWeight: 600, color: 'success.main' }}>
+                                ₱{order.amount?.toFixed(2)}
+                              </Typography>
+                            </Box>
+                          </Grid>
+
+                          <Grid item xs={6}>
+                            <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                              <CalendarIcon sx={{ mr: 1, color: 'text.secondary', fontSize: 18 }} />
+                              <Typography variant="body2">
+                                {order.date}
+                              </Typography>
+                            </Box>
+                          </Grid>
+
+                          {order.contact_number && (
+                            <Grid item xs={12}>
+                              <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                                <PhoneIcon sx={{ mr: 1, color: 'text.secondary', fontSize: 18 }} />
+                                <Typography variant="body2">
+                                  {order.contact_number}
+                                </Typography>
+                              </Box>
+                            </Grid>
+                          )}
+
+                          {order.email && (
+                            <Grid item xs={12}>
+                              <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                                <EmailIcon sx={{ mr: 1, color: 'text.secondary', fontSize: 18 }} />
+                                <Typography variant="body2">
+                                  {order.email}
+                                </Typography>
+                              </Box>
+                            </Grid>
+                          )}
+
+                          {order.address && (
+                            <Grid item xs={12}>
+                              <Box sx={{ display: 'flex', alignItems: 'flex-start', mb: 1 }}>
+                                <LocationIcon sx={{ mr: 1, color: 'text.secondary', fontSize: 18, mt: 0.2 }} />
+                                <Typography variant="body2">
+                                  {order.address}
+                                </Typography>
+                              </Box>
+                            </Grid>
+                          )}
+                        </Grid>
+
+                        {printingOrders.has(order.id) && (
+                          <Box sx={{ mt: 2 }}>
+                            <LinearProgress sx={{ borderRadius: 1 }} />
+                            <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                              Sending to printer...
+                            </Typography>
+                          </Box>
+                        )}
+                      </CardContent>
+                    </Card>
+                  ))}
+                </Box>
+              ) : (
+                // Desktop Table View
+                <TableContainer>
+                  <Table>
+                    <TableHead>
+                      <TableRow sx={{ backgroundColor: 'rgba(0, 0, 0, 0.04)' }}>
+                        <TableCell sx={{ fontWeight: 700, fontSize: '0.9rem' }}>Order #</TableCell>
+                        <TableCell sx={{ fontWeight: 700, fontSize: '0.9rem' }}>Customer</TableCell>
+                        <TableCell sx={{ fontWeight: 700, fontSize: '0.9rem' }}>Product</TableCell>
+                        <TableCell sx={{ fontWeight: 700, fontSize: '0.9rem' }}>Amount</TableCell>
+                        <TableCell sx={{ fontWeight: 700, fontSize: '0.9rem' }}>Date</TableCell>
+                        <TableCell sx={{ fontWeight: 700, fontSize: '0.9rem' }}>Contact</TableCell>
+                        <TableCell sx={{ fontWeight: 700, fontSize: '0.9rem' }}>Actions</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {orders.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage).map((order, index) => (
+                        <TableRow 
+                          key={order.id} 
+                          sx={{ 
+                            '&:hover': { 
+                              backgroundColor: 'rgba(0, 0, 0, 0.02)',
+                              transform: 'scale(1.001)',
+                              transition: 'all 0.2s ease-in-out'
+                            },
+                            position: 'relative'
+                          }}
+                        >
+                          <TableCell>
+                            <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                              <Avatar sx={{ bgcolor: 'primary.main', mr: 2, width: 32, height: 32 }}>
+                                <Typography variant="caption" sx={{ fontWeight: 600 }}>
+                                  {index + 1 + page * rowsPerPage}
+                                </Typography>
+                              </Avatar>
+                              <Box>
+                                <Typography variant="body2" sx={{ fontWeight: 600, color: 'primary.main' }}>
+                                  {order.order_number}
+                                </Typography>
+                                <Typography variant="caption" color="text.secondary">
+                                  ID: {order.id}
+                                </Typography>
+                              </Box>
+                            </Box>
+                          </TableCell>
+                          <TableCell>
+                            <Box>
+                              <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                                {order.customer_name}
+                              </Typography>
+                              {order.email && (
+                                <Typography variant="caption" color="text.secondary">
+                                  {order.email}
+                                </Typography>
+                              )}
+                            </Box>
+                          </TableCell>
+                          <TableCell>
+                            <Typography variant="body2">{order.product_name}</Typography>
+                          </TableCell>
+                          <TableCell>
+                            <Chip
+                              label={`₱${order.amount?.toFixed(2)}`}
+                              color="success"
+                              variant="outlined"
+                              size="small"
+                              sx={{ fontWeight: 600, borderRadius: 2 }}
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <Typography variant="body2">{order.date}</Typography>
+                          </TableCell>
+                          <TableCell>
+                            <Box>
+                              {order.contact_number && (
+                                <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>
+                                  📞 {order.contact_number}
+                                </Typography>
+                              )}
+                              {order.address && (
+                                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                                  📍 {order.address.length > 30 ? `${order.address.substring(0, 30)}...` : order.address}
+                                </Typography>
+                              )}
+                            </Box>
+                          </TableCell>
+                          <TableCell>
+                            <Button
+                              variant="contained"
+                              color="primary"
+                              size="small"
+                              startIcon={printingOrders.has(order.id) ? <CircularProgress size={16} /> : <PrintIcon />}
+                              onClick={() => handlePrintQRCode(order.id)}
+                              disabled={printingOrders.has(order.id)}
+                              sx={{
+                                minWidth: '100px',
+                                borderRadius: 2,
+                                textTransform: 'none',
+                                fontWeight: 600,
+                                background: printingOrders.has(order.id) 
+                                  ? 'linear-gradient(45deg, #ff9800, #ffc107)' 
+                                  : 'linear-gradient(45deg, #2196f3, #21cbf3)',
+                                '&:hover': {
+                                  background: printingOrders.has(order.id)
+                                    ? 'linear-gradient(45deg, #ff9800, #ffc107)'
+                                    : 'linear-gradient(45deg, #1976d2, #1cb5e0)',
+                                }
+                              }}
+                            >
+                              {printingOrders.has(order.id) ? 'Printing...' : 'Print QR'}
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              )}
+
+              <TablePagination
+                rowsPerPageOptions={[5, 10, 25, 50]}
+                component="div"
+                count={orders.length}
+                rowsPerPage={rowsPerPage}
+                page={page}
+                onPageChange={handleChangePage}
+                onRowsPerPageChange={handleChangeRowsPerPage}
+                sx={{ 
+                  borderTop: '1px solid rgba(0, 0, 0, 0.12)',
+                  backgroundColor: 'rgba(0, 0, 0, 0.02)'
+                }}
+              />
+            </Paper>
+          </Grow>
+        </Box>
+      </Fade>
+
+      {/* Snackbar for notifications */}
       <Snackbar
         open={snackbar.open}
         autoHideDuration={6000}
         onClose={handleCloseSnackbar}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
       >
-        <Alert
-          onClose={handleCloseSnackbar}
-          severity={snackbar.severity}
-          sx={{ width: '100%' }}
+        <Alert 
+          onClose={handleCloseSnackbar} 
+          severity={snackbar.severity} 
+          sx={{ 
+            width: '100%',
+            borderRadius: 2,
+            backdropFilter: 'blur(10px)'
+          }}
         >
           {snackbar.message}
         </Alert>
@@ -466,4 +794,4 @@ const Orders = () => {
   );
 };
 
-export default Orders; 
+export default Orders;
