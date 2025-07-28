@@ -185,6 +185,16 @@ def init_db():
     except Exception as e:
         logger.debug(f"Could not add package_size column (may already exist): {e}")
     
+    # Add package_size column to package_information table if it doesn't exist (migration)
+    try:
+        c.execute("PRAGMA table_info(package_information)")
+        columns = [column[1] for column in c.fetchall()]
+        if 'package_size' not in columns:
+            c.execute("ALTER TABLE package_information ADD COLUMN package_size TEXT")
+            logger.debug("Added package_size column to package_information table")
+    except Exception as e:
+        logger.debug(f"Could not add package_size column to package_information (may already exist): {e}")
+    
     conn.commit()
     conn.close()
 
@@ -1341,8 +1351,8 @@ def validate_qr_code():
                             # Create package information record
                             c.execute('''
                                 INSERT INTO package_information 
-                                (order_id, order_number, weight, width, height, length, timestamp)
-                                VALUES (?, ?, ?, ?, ?, ?, ?)
+                                (order_id, order_number, weight, width, height, length, package_size, timestamp)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                             ''', (
                                 order['id'],
                                 order['order_number'],
@@ -1350,6 +1360,7 @@ def validate_qr_code():
                                 sensor_data['width'],
                                 sensor_data['height'],
                                 sensor_data['length'],
+                                sensor_data.get('package_size', 'Unknown'),
                                 datetime.now().isoformat()
                             ))
                             
@@ -1753,6 +1764,57 @@ def clear_sensor_data():
         logger.error(f"Error clearing sensor data: {e}")
         return jsonify({
             'error': 'Failed to clear sensor data',
+            'details': str(e)
+        }), 500
+
+@app.route('/api/sensor-data/all', methods=['GET'])
+def get_all_sensor_data():
+    """Get all sensor data records for package display"""
+    try:
+        conn = sqlite3.connect('database.db')
+        conn.row_factory = dict_factory
+        c = conn.cursor()
+        
+        # Get all sensor data records, ordered by most recent first
+        c.execute('''
+            SELECT id, weight, width, height, length, package_size, 
+                   loadcell_timestamp, box_dimensions_timestamp, created_at
+            FROM loaded_sensor_data 
+            ORDER BY created_at DESC 
+            LIMIT 50
+        ''')
+        sensor_records = c.fetchall()
+        
+        # Format the data to match what the frontend expects
+        packages = []
+        for i, record in enumerate(sensor_records):
+            packages.append({
+                'id': record['id'],
+                'order_number': f"ORD-{str(i + 1).zfill(3)}",  # Generate order numbers like ORD-001, ORD-002
+                'order_id': f"ORD-{str(i + 1).zfill(3)}",
+                'weight': record['weight'],
+                'width': record['width'],
+                'height': record['height'],
+                'length': record['length'],
+                'package_size': record['package_size'],
+                'size': record['package_size'],  # Alias for compatibility
+                'created_at': record['created_at'],
+                'scanned_at': record['created_at'],  # Alias for compatibility
+                'timestamp': record['created_at']  # Alias for compatibility
+            })
+        
+        conn.close()
+        
+        return jsonify({
+            'packages': packages,
+            'count': len(packages),
+            'timestamp': datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting all sensor data: {e}")
+        return jsonify({
+            'error': 'Failed to get sensor data',
             'details': str(e)
         }), 500
 

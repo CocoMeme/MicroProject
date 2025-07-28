@@ -1089,12 +1089,13 @@ export default function Scanner() {
                       <Table size="small">
                         <TableHead>
                           <TableRow sx={{ backgroundColor: 'rgba(0, 0, 0, 0.02)' }}>
-                            <TableCell sx={{ fontWeight: 600 }}>Order ID</TableCell>
+                            <TableCell sx={{ fontWeight: 600 }}>Order ID (ORD)</TableCell>
                             <TableCell align="center" sx={{ fontWeight: 600 }}>Size</TableCell>
                             <TableCell align="center" sx={{ fontWeight: 600 }}>Length</TableCell>
                             <TableCell align="center" sx={{ fontWeight: 600 }}>Width</TableCell>
                             <TableCell align="center" sx={{ fontWeight: 600 }}>Height</TableCell>
-                            <TableCell align="center" sx={{ fontWeight: 600 }}>Time of Scan</TableCell>
+                            <TableCell align="center" sx={{ fontWeight: 600 }}>Weight</TableCell>
+                            <TableCell align="center" sx={{ fontWeight: 600 }}>Scanned At</TableCell>
                           </TableRow>
                         </TableHead>
                         <TableBody>
@@ -1102,14 +1103,14 @@ export default function Scanner() {
                             <TableRow key={index} sx={{ '&:hover': { backgroundColor: 'rgba(0, 0, 0, 0.02)' } }}>
                               <TableCell>
                                 <Typography variant="body2" sx={{ fontWeight: 600, color: 'primary.main' }}>
-                                  {pkg.order_number || pkg.order_id || `PKG-${index + 1}`}
+                                  {pkg.order_number || pkg.order_id || `ORD-${String(index + 1).padStart(3, '0')}`}
                                 </Typography>
                               </TableCell>
                               <TableCell align="center">
                                 <Chip 
-                                  label={pkg.size || pkg.weight ? `${pkg.size || pkg.weight} kg` : 'N/A'} 
+                                  label={pkg.package_size ? pkg.package_size : 'Unknown'} 
                                   size="small" 
-                                  color={pkg.size || pkg.weight ? 'primary' : 'default'}
+                                  color={pkg.package_size ? 'primary' : 'default'}
                                   variant="outlined"
                                 />
                               </TableCell>
@@ -1129,9 +1130,14 @@ export default function Scanner() {
                                 </Typography>
                               </TableCell>
                               <TableCell align="center">
+                                <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600 }}>
+                                  {pkg.weight ? `${pkg.weight} kg` : 'N/A'}
+                                </Typography>
+                              </TableCell>
+                              <TableCell align="center">
                                 <Typography variant="caption" color="text.secondary">
-                                  {pkg.timestamp || pkg.scanned_at || pkg.time_of_scan 
-                                    ? new Date(pkg.timestamp || pkg.scanned_at || pkg.time_of_scan).toLocaleString()
+                                  {pkg.created_at || pkg.timestamp || pkg.scanned_at || pkg.time_of_scan 
+                                    ? new Date(pkg.created_at || pkg.timestamp || pkg.scanned_at || pkg.time_of_scan).toLocaleString()
                                     : 'N/A'
                                   }
                                 </Typography>
