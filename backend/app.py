@@ -10,6 +10,8 @@ import sqlite3
 from dotenv import load_dotenv
 import threading
 import logging
+import paho.mqtt.client as mqtt
+import json
 from products_data import products_data
 
 # Configure logging
@@ -261,7 +263,7 @@ def dict_factory(cursor, row):
     return d
 
 # Configuration for Raspberry Pi
-RASPBERRY_PI_URL = os.getenv('RASPBERRY_PI_URL', 'http://localhost:5001')  # Default value if not set
+RASPBERRY_PI_URL = os.getenv('RASPBERRY_PI_URL', 'http://10.195.139.227:5001')  # Default value if not set
 
 def send_print_request_to_raspi(order_data):
     """Send print request to Raspberry Pi with order details"""
@@ -436,6 +438,7 @@ def receive_qr_scans():
         return jsonify({'error': 'Internal server error', 'details': str(e)}), 500
 
 @app.route('/api/qr-scans', methods=['GET'])
+@app.route('/api/qr-history', methods=['GET'])  # Alias for frontend compatibility
 def get_qr_scans():
     """Get QR scan history"""
     try:
@@ -1274,6 +1277,8 @@ def validate_qr_code():
     try:
         data = request.get_json()
         qr_data = data.get('qr_data')
+        source = data.get('source', 'web')  # Default to 'web' if not specified
+        skip_print = data.get('skip_print', False)  # Default to False if not specified
         
         if not qr_data:
             return jsonify({'error': 'No QR data provided'}), 400
@@ -1307,7 +1312,10 @@ def validate_qr_code():
                     'product_name': order['product_name'],
                     'amount': order['amount'],
                     'date': order['date'],
-                    'message': f'Order {qr_data} was already scanned successfully',
+                    'address': order.get('address', 'N/A'),
+                    'contact_number': order.get('contact_number', 'N/A'),
+                    'email': order.get('email', ''),
+                    'message': f'Order {qr_data} already scanned successfully',
                     'scanned_at': already_scanned['scanned_at']
                 }
             else:
@@ -1375,17 +1383,22 @@ def validate_qr_code():
                         conn.commit()
                         logger.info(f"Successfully scanned QR code {qr_data} for order {order['order_number']}")
                         
-                        # Send print request to Raspberry Pi for successful scan
-                        logger.info(f"Attempting to send print request for order {order['order_number']}")
-                        try:
-                            print_success, print_message = send_print_request_to_raspi(order)
-                            if print_success:
-                                logger.info(f"Print request sent successfully for order {order['order_number']}")
-                            else:
-                                logger.warning(f"Print request failed for order {order['order_number']}: {print_message}")
-                        except Exception as e:
-                            print_success, print_message = False, f"Print function error: {str(e)}"
-                            logger.error(f"Exception in print request for order {order['order_number']}: {e}")
+                        # Send print request to Raspberry Pi for successful scan (only if not skipped)
+                        if not skip_print:
+                            logger.info(f"Attempting to send print request for order {order['order_number']}")
+                            try:
+                                print_success, print_message = send_print_request_to_raspi(order)
+                                if print_success:
+                                    logger.info(f"Print request sent successfully for order {order['order_number']}")
+                                else:
+                                    logger.warning(f"Print request failed for order {order['order_number']}: {print_message}")
+                            except Exception as e:
+                                print_success, print_message = False, f"Print function error: {str(e)}"
+                                logger.error(f"Exception in print request for order {order['order_number']}: {e}")
+                        else:
+                            # Skip print request as requested (likely handled by local camera system)
+                            print_success, print_message = True, "Print request skipped (handled locally)"
+                            logger.info(f"Print request skipped for order {order['order_number']} - handled by {source}")
                         
                         response_data = {
                             'valid': True,
@@ -1396,6 +1409,9 @@ def validate_qr_code():
                             'product_name': order['product_name'],
                             'amount': order['amount'],
                             'date': order['date'],
+                            'address': order.get('address', 'N/A'),
+                            'contact_number': order.get('contact_number', 'N/A'),
+                            'email': order.get('email', ''),
                             'message': f'Order {qr_data} scanned successfully!',
                             'package_information': package_info,
                             'sensor_data_applied': sensor_data is not None,
@@ -1416,6 +1432,9 @@ def validate_qr_code():
                             'product_name': order['product_name'],
                             'amount': order['amount'],
                             'date': order['date'],
+                            'address': order.get('address', 'N/A'),
+                            'contact_number': order.get('contact_number', 'N/A'),
+                            'email': order.get('email', ''),
                             'message': f'Order {qr_data} was already scanned successfully',
                             'scanned_at': existing_scan['scanned_at'] if existing_scan else 'Unknown'
                         }

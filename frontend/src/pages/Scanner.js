@@ -51,8 +51,8 @@ import ErrorIcon from '@mui/icons-material/Error';
 import WarningIcon from '@mui/icons-material/Warning';
 import websocketService from '../services/websocketService';
 
-const RASPI_SERVER = process.env.REACT_APP_RASPI_BASE_URL || 'http://192.168.100.63:5001';
-const BACKEND_SERVER = process.env.REACT_APP_API_BASE_URL || 'http://192.168.100.61:5000';
+const RASPI_SERVER = process.env.REACT_APP_RASPI_BASE_URL || 'http://10.195.139.227:5001';
+const BACKEND_SERVER = process.env.REACT_APP_API_BASE_URL || 'http://10.195.139.225:5000';
 
 // Debug logging
 console.log('Environment Variables:', {
@@ -305,49 +305,87 @@ export default function Scanner() {
     setIsLoadingHistory(true);
     try {
       console.log('Fetching QR history...'); // Debug log
-      const response = await fetch(`${BACKEND_SERVER}/api/qr-history`, {
-        cache: 'no-cache',
-        headers: {
-          'Cache-Control': 'no-cache',
-          'Pragma': 'no-cache'
-        }
-      });
       
-      if (response.ok) {
-        const data = await response.json();
-        console.log('QR history retrieved:', data); // Debug log
-        
-        // Combine frontend and backend histories
-        const combinedHistory = [...(data.frontend_history || []), ...(data.backend_history || [])];
-        
-        // Sort by timestamp (latest first)
-        combinedHistory.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-        
-        // Remove duplicates based on order number - keep only the latest scan for each order
-        const uniqueScans = new Map();
-        const deduplicatedHistory = [];
-        
-        for (const scan of combinedHistory) {
-          // Determine the order identifier (prefer order_number from validation, fallback to qr_data)
-          const orderIdentifier = scan.validation?.order_number || scan.qr_data;
-          
-          // Only keep the first occurrence (which is the latest due to sorting)
-          if (!uniqueScans.has(orderIdentifier)) {
-            uniqueScans.set(orderIdentifier, true);
-            deduplicatedHistory.push(scan);
+      // Fetch from both Raspberry Pi (live camera history) and main backend (stored scans)
+      const [raspiResponse, backendResponse] = await Promise.allSettled([
+        fetch(`${RASPI_SERVER}/camera/qr-history`, {
+          cache: 'no-cache',
+          headers: {
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache'
           }
+        }),
+        fetch(`${BACKEND_SERVER}/api/qr-history`, {
+          cache: 'no-cache',
+          headers: {
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache'
+          }
+        })
+      ]);
+      
+      let combinedHistory = [];
+      
+      // Add Raspberry Pi local history
+      if (raspiResponse.status === 'fulfilled' && raspiResponse.value.ok) {
+        const raspiData = await raspiResponse.value.json();
+        console.log('Raspi QR history:', raspiData); // Debug log
+        if (raspiData.qr_history) {
+          combinedHistory = [...raspiData.qr_history];
         }
-        
-        console.log('Final combined history (before deduplication):', combinedHistory); // Debug log
-        console.log('Deduplicated history:', deduplicatedHistory); // Debug log
-        const removedCount = combinedHistory.length - deduplicatedHistory.length;
-        console.log(`Removed ${removedCount} duplicate scans`); // Debug log
-        
-        setQrHistory(deduplicatedHistory.slice(0, 20)); // Keep only latest 20 unique scans
-        setLastRefresh(new Date()); // Update last refresh time
       } else {
-        console.error('Failed to fetch QR history:', response.status);
+        console.log('Failed to fetch Raspi QR history:', raspiResponse); // Debug log
       }
+      
+      // Add backend stored scans
+      if (backendResponse.status === 'fulfilled' && backendResponse.value.ok) {
+        const backendData = await backendResponse.value.json();
+        console.log('Backend QR scans:', backendData); // Debug log
+        if (Array.isArray(backendData)) {
+          // Transform backend scans to match local history format
+          const backendScans = backendData.map(scan => ({
+            qr_data: scan.qr_data,
+            timestamp: scan.timestamp,
+            device: scan.device || 'backend',
+            validation: {
+              valid: scan.is_valid,
+              message: scan.validation_message,
+              order_id: scan.order_id
+            },
+            source: 'backend'
+          }));
+          
+          combinedHistory = [...combinedHistory, ...backendScans];
+        }
+      } else {
+        console.log('Failed to fetch backend QR scans:', backendResponse); // Debug log
+      }
+      
+      // Sort by timestamp (latest first)
+      combinedHistory.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+      
+      // Remove duplicates based on order number - keep only the latest scan for each order
+      const uniqueScans = new Map();
+      const deduplicatedHistory = [];
+      
+      for (const scan of combinedHistory) {
+        // Determine the order identifier (prefer order_number from validation, fallback to qr_data)
+        const orderIdentifier = scan.validation?.order_number || scan.qr_data;
+        
+        // Only keep the first occurrence (which is the latest due to sorting)
+        if (!uniqueScans.has(orderIdentifier)) {
+          uniqueScans.set(orderIdentifier, true);
+          deduplicatedHistory.push(scan);
+        }
+      }
+      
+      console.log('Final combined history (before deduplication):', combinedHistory); // Debug log
+      console.log('Deduplicated history:', deduplicatedHistory); // Debug log
+      const removedCount = combinedHistory.length - deduplicatedHistory.length;
+      console.log(`Removed ${removedCount} duplicate scans`); // Debug log
+      
+      setQrHistory(deduplicatedHistory.slice(0, 20)); // Keep only latest 20 unique scans
+      setLastRefresh(new Date()); // Update last refresh time
     } catch (err) {
       console.error('Failed to get QR history:', err);
     } finally {

@@ -130,7 +130,7 @@ export default function Dashboard() {
         persistent: true,
       });
       
-      const response = await fetch(`${process.env.REACT_APP_API_ENDPOINT || 'http://192.168.100.61:5000/api'}/system/start`, {
+      const response = await fetch(`${process.env.REACT_APP_API_ENDPOINT || 'http://10.195.139.225:5000/api'}/system/start`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -200,7 +200,7 @@ export default function Dashboard() {
         persistent: true,
       });
       
-      const response = await fetch(`${process.env.REACT_APP_API_ENDPOINT || 'http://192.168.100.61:5000/api'}/system/stop`, {
+      const response = await fetch(`${process.env.REACT_APP_API_ENDPOINT || 'http://10.195.139.227:5000/api'}/system/stop`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

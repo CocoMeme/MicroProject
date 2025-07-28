@@ -10,7 +10,7 @@ import base64
 import os
 
 	# Backend server URL (your website)
-BACKEND_SERVER = 'http://192.168.100.61:5000'  # Your Flask backend
+BACKEND_SERVER = 'http://10.195.139.225:5000'  # Your Flask backend
 
 	# Try to import Raspberry Pi specific modules, fall back to mock if not available
 try:
@@ -280,7 +280,11 @@ class CameraManager:
 				# Make HTTP request to backend server to validate QR code
 				response = requests.post(
 					f'{BACKEND_SERVER}/api/validate-qr',
-					json={'qr_data': qr_data},
+					json={
+						'qr_data': qr_data,
+						'source': 'camera',  # Indicate this request comes from camera
+						'skip_print': True   # Skip automatic print request since we'll handle it locally
+					},
 					timeout=5
 				)
 				

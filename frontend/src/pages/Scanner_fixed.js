@@ -34,8 +34,8 @@ import FullscreenIcon from '@mui/icons-material/Fullscreen';
 import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
 import websocketService from '../services/websocketService';
 
-const RASPI_SERVER = process.env.REACT_APP_RASPI_BASE_URL || 'http://192.168.100.63:5001';
-const BACKEND_SERVER = process.env.REACT_APP_API_BASE_URL || 'http://192.168.100.61:5000';
+const RASPI_SERVER = process.env.REACT_APP_RASPI_BASE_URL || 'http://10.195.139.227:5001';
+const BACKEND_SERVER = process.env.REACT_APP_API_BASE_URL || 'http://10.195.139.225:5000';
 
 // Debug logging
 console.log('Environment Variables:', {
@@ -453,7 +453,9 @@ export default function Scanner() {
   };
 
   const isValidQR = (qr) => {
-    return qr.is_valid === true || qr.is_valid === 'true';
+    // Check if validation exists and is valid
+    return qr.validation && (qr.validation.valid === true || qr.validation.valid === 'true') ||
+           qr.is_valid === true || qr.is_valid === 'true';
   };
 
   const getQRStatusChip = (qr) => {

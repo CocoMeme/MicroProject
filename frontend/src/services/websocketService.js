@@ -10,7 +10,7 @@ class WebSocketService {
     this.reconnectDelay = 1000; // Start with 1 second
   }
 
-  connect(url = process.env.REACT_APP_WEBSOCKET_URL || 'http://192.168.100.61:5000') {
+  connect(url = process.env.REACT_APP_WEBSOCKET_URL || 'http://10.195.139.225:5000') {
     if (this.socket?.connected) {
       return Promise.resolve();
     }

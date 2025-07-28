@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """
-Script to create complete test flow: orders + sensor data + QR validation
+Script to create complete test flow: orders + sensor             # Use the actual validation endpoint to simulate real workflow
+            try:
+                response = requests.post('http://10.195.139.225:5000/api/validate-qr', 
+                                       json={'qr_data': order_number},
+                                       timeout=5)+ QR validation
 This simulates the complete package scanning workflow
 """
 

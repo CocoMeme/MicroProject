@@ -104,6 +104,35 @@ class MQTTListener:
                         if weight_match:
                             weight = float(weight_match.group(1))
                             logger.info(f"LOADCELL: Parsed formatted weight: {weight}g from message: {message}")
+                            
+                            # Send grabber start command when final weight is received
+                            def send_grabber_start_command():
+                                try:
+                                    logger.info("STEP 4 - FINAL WEIGHT COMPLETE: Sending grabber start command...")
+                                    
+                                    # Send grabber start request via MQTT
+                                    success = mqtt_listener.publish_message('esp32/grabber1/request', 'start')
+                                    if success:
+                                        logger.info("SUCCESS: Grabber1 START request sent (esp32/grabber1/request > start)")
+                                        
+                                        # Emit WebSocket notification
+                                        socketio.emit('workflow_progress', {
+                                            'step': 4,
+                                            'status': 'grabber_start_requested',
+                                            'message': 'Final weight received - Grabber1 start requested',
+                                            'timestamp': datetime.now().isoformat(),
+                                            'triggered_by': 'loadcell_final_weight',
+                                            'weight': weight
+                                        })
+                                    else:
+                                        logger.error("FAILED: Could not send grabber1 start request")
+                                        
+                                except Exception as e:
+                                    logger.error(f"Error sending grabber1 start request: {e}")
+                            
+                            # Start request in background thread to not block MQTT processing
+                            request_thread = threading.Thread(target=send_grabber_start_command, daemon=True)
+                            request_thread.start()
                     else:
                         # Try to parse as direct numeric value
                         weight = float(message)
@@ -176,57 +205,43 @@ class MQTTListener:
                 try:
                     # Check for IR sensor triggered message from ESP32 hardware
                     if 'triggered' in message.lower() or 'detected' in message.lower() or message.strip() == '1':
-                        logger.info("STEP 1 - IR SENSOR: ESP32 IR sensor detected object approaching - Waiting to weigh")
+                        logger.info("STEP 1 - IR SENSOR: ESP32 IR sensor detected object - Stopping Motor A")
                         
-                        # Emit immediate IR sensor status via WebSocket
-                        socketio.emit('workflow_progress', {
-                            'step': 1,
-                            'status': 'ir_triggered',
-                            'message': 'IR triggered - Waiting to weigh',
-                            'timestamp': datetime.now().isoformat()
-                        })
-                        
-                        # Send immediate loadcell start request when ESP32 IR is triggered
-                        def send_loadcell_start_on_ir():
+                        # First stop Motor A when IR A detects object
+                        def stop_motor_a_and_continue():
                             try:
-                                logger.info("ESP32 IR sensor triggered - Sending START request to loadcell...")
+                                logger.info("IR A DETECTED: Sending STOP command to Motor A...")
                                 
-                                # Send loadcell START request via MQTT
-                                success = mqtt_listener.publish_message('esp32/loadcell/request', 'start')
-                                if success:
-                                    logger.info("SUCCESS: Loadcell START request sent (esp32/loadcell/request > start)")
+                                # Send motor stopA request via MQTT
+                                motor_stop_success = mqtt_listener.publish_message('esp32/motor/request', 'stopA')
+                                if motor_stop_success:
+                                    logger.info("SUCCESS: Motor A STOP request sent (esp32/motor/request > stopA)")
                                     
-                                    # Emit confirmation status
+                                    # Emit immediate IR sensor status via WebSocket
                                     socketio.emit('workflow_progress', {
-                                        'step': 1.5,
-                                        'status': 'waiting_to_weigh',
-                                        'message': 'Waiting to weigh - Loadcell START request sent',
+                                        'step': 1,
+                                        'status': 'ir_triggered_motor_stopping',
+                                        'message': 'IR A triggered - Motor A stop requested',
                                         'timestamp': datetime.now().isoformat()
                                     })
                                     
-                                    # Also emit specific loadcell activation status
-                                    socketio.emit('loadcell_status', {
-                                        'status': 'activated',
-                                        'message': 'Loadcell activated - Ready to weigh',
-                                        'triggered_by': 'esp32_ir_sensor',
-                                        'timestamp': datetime.now().isoformat()
-                                    })
+                                    logger.info("🔄 WORKFLOW: IR A detected → Motor A stop requested → Waiting for Motor A status")
                                 else:
-                                    logger.error("FAILED: Could not send loadcell START request from ESP32 IR trigger")
+                                    logger.error("FAILED: Could not send Motor A stop request")
                                     
                                     # Emit error status
                                     socketio.emit('workflow_progress', {
                                         'step': 1,
                                         'status': 'error',
-                                        'message': 'ESP32 IR triggered but failed to activate loadcell',
+                                        'message': 'IR A triggered but failed to stop Motor A',
                                         'timestamp': datetime.now().isoformat()
                                     })
                                     
                             except Exception as e:
-                                logger.error(f"ERROR: Exception while sending loadcell START request from ESP32 IR: {e}")
+                                logger.error(f"ERROR: Exception while stopping Motor A from IR A trigger: {e}")
                         
-                        # Execute loadcell start request in background thread
-                        request_thread = threading.Thread(target=send_loadcell_start_on_ir, daemon=True)
+                        # Execute motor stop request in background thread
+                        request_thread = threading.Thread(target=stop_motor_a_and_continue, daemon=True)
                         request_thread.start()
                         
                     else:
@@ -240,35 +255,65 @@ class MQTTListener:
                 try:
                     # Check for Motor A stopped by IR A message
                     if 'Motor A stopped by IR A' in message:
-                        logger.info(f"STEP 2 - MOTOR STATUS: Motor A stopped by IR A - Starting loadcell")
+                        logger.info(f"STEP 2 - MOTOR STATUS: Motor A stopped by IR A - Starting actuator then loadcell")
                         
-                        # Send immediate loadcell request when Motor A is stopped by IR A
-                        def send_loadcell_request_motor_a():
+                        # Send actuator first, then loadcell after actuator completes
+                        def send_actuator_then_loadcell():
                             try:
-                                logger.debug("Motor A stopped by IR A - Sending loadcell start request to ESP32...")
+                                # STEP 1: Start actuator with 5 second delay
+                                logger.info("STEP 2.1 - ACTUATOR: Adding 5 second delay before starting actuator...")
+                                
+                                # Add 5 second delay as requested
+                                time.sleep(5)
+                                
+                                logger.info("STEP 2.1 - ACTUATOR DELAY COMPLETE: Sending actuator start command...")
+                                
+                                # Send actuator start request via MQTT
+                                actuator_success = mqtt_listener.publish_message('esp32/actuator/request', 'start')
+                                if actuator_success:
+                                    logger.info("SUCCESS: Actuator START request sent (esp32/actuator/request > start)")
+                                    
+                                    # Emit WebSocket notification for actuator start
+                                    socketio.emit('workflow_progress', {
+                                        'step': 2.1,
+                                        'status': 'actuator_start_requested',
+                                        'message': 'Actuator start requested after 5s delay',
+                                        'timestamp': datetime.now().isoformat(),
+                                        'triggered_by': 'motor_a_ir_a_delay'
+                                    })
+                                    
+                                    logger.info("🔧 WORKFLOW: Motor A stopped → 5s delay → Actuator activated")
+                                else:
+                                    logger.error("FAILED: Could not send actuator start request")
+                                    return  # Don't proceed to loadcell if actuator failed
+                                
+                                # STEP 2: Start loadcell after actuator
+                                logger.info("STEP 2.2 - LOADCELL: Actuator started, now starting loadcell...")
                                 
                                 # Send loadcell request via MQTT
-                                success = mqtt_listener.publish_message('esp32/loadcell/request', 'start')
-                                if success:
-                                    logger.info("SUCCESS: Loadcell START request sent due to Motor A stopped by IR A (esp32/loadcell/request > start)")
+                                loadcell_success = mqtt_listener.publish_message('esp32/loadcell/request', 'start')
+                                if loadcell_success:
+                                    logger.info("SUCCESS: Loadcell START request sent after actuator (esp32/loadcell/request > start)")
                                     
                                     # Emit workflow progress via WebSocket
                                     socketio.emit('workflow_progress', {
-                                        'step': 2,
-                                        'status': 'motor_a_stopped_ir_a',
-                                        'message': 'Motor A stopped by IR A, loadcell reading requested',
+                                        'step': 2.2,
+                                        'status': 'loadcell_start_requested',
+                                        'message': 'Loadcell started after actuator activation',
                                         'timestamp': datetime.now().isoformat(),
-                                        'triggered_by': 'motor_a_ir_a'
+                                        'triggered_by': 'actuator_complete'
                                     })
+                                    
+                                    logger.info("� WORKFLOW: Actuator → Loadcell → Weight measurement")
                                 else:
-                                    logger.error("FAILED: Could not send loadcell request after Motor A stopped by IR A")
+                                    logger.error("FAILED: Could not send loadcell request after actuator")
                                     
                             except Exception as e:
-                                logger.error(f"Error sending loadcell request for Motor A IR A: {e}")
+                                logger.error(f"Error in actuator-loadcell sequence: {e}")
                         
-                        # Start request in background thread to not block MQTT processing
-                        request_thread = threading.Thread(target=send_loadcell_request_motor_a, daemon=True)
-                        request_thread.start()
+                        # Start sequential process in background thread
+                        sequence_thread = threading.Thread(target=send_actuator_then_loadcell, daemon=True)
+                        sequence_thread.start()
                         
                         # Emit immediate motor status via WebSocket
                         socketio.emit('workflow_progress', {
@@ -277,6 +322,40 @@ class MQTTListener:
                             'message': 'Motor A stopped by IR A - Requesting weight measurement',
                             'timestamp': datetime.now().isoformat()
                         })
+                    
+                    # Check for IR B triggered message
+                    elif '📍 IR B triggered' in message:
+                        logger.info(f"STEP - IR B: IR B triggered - Stopping Motor B")
+                        
+                        # Send Motor B stop request when IR B is triggered
+                        def send_motor_b_stop():
+                            try:
+                                logger.info("IR B TRIGGERED: Sending stopB command to Motor B...")
+                                
+                                # Send motor stopB request via MQTT
+                                motor_b_stop_success = mqtt_listener.publish_message('esp32/motor/request', 'stopB')
+                                if motor_b_stop_success:
+                                    logger.info("SUCCESS: Motor B STOP request sent (esp32/motor/request > stopB)")
+                                    
+                                    # Emit WebSocket notification for Motor B stop
+                                    socketio.emit('workflow_progress', {
+                                        'step': 'motor_b_stop',
+                                        'status': 'motor_b_stop_requested',
+                                        'message': 'IR B triggered - Motor B stop requested',
+                                        'timestamp': datetime.now().isoformat(),
+                                        'triggered_by': 'ir_b_triggered'
+                                    })
+                                    
+                                    logger.info("🔄 WORKFLOW: IR B triggered → Motor B stop requested")
+                                else:
+                                    logger.error("FAILED: Could not send Motor B stop request")
+                                    
+                            except Exception as e:
+                                logger.error(f"Error sending Motor B stop request: {e}")
+                        
+                        # Execute Motor B stop request in background thread
+                        motor_b_thread = threading.Thread(target=send_motor_b_stop, daemon=True)
+                        motor_b_thread.start()
                     
                     # Check for object detection message (existing Motor B logic)
                     elif '📍 Object detected! Motor B paused' in message:
@@ -394,6 +473,43 @@ class MQTTListener:
                             'timestamp': datetime.now().isoformat()
                         })
                         
+                    elif '✅ Parcel process 1 complete' in message:
+                        logger.info("✅ STEP 4 COMPLETE: Parcel process 1 complete (handled by parcel1 status handler)")
+                        
+                        # This completion is now handled by the specific esp32/parcel1/status handler
+                        # to avoid duplicate box system triggers
+                        
+                    elif '✅ Parcel process 2 complete' in message:
+                        logger.info("✅ STEP 5 COMPLETE: Parcel process 2 complete - Starting motor B...")
+                        
+                        # Send motor startB command when parcel process 2 is complete
+                        def send_motor_startB_command():
+                            try:
+                                logger.info("STEP 6 - PARCEL PROCESS 2 COMPLETE: Sending motor startB command...")
+                                
+                                # Send motor startB request via MQTT
+                                success = mqtt_listener.publish_message('esp32/motor/request', 'startB')
+                                if success:
+                                    logger.info("SUCCESS: Motor startB request sent (esp32/motor/request > startB)")
+                                    
+                                    # Emit WebSocket notification
+                                    socketio.emit('workflow_progress', {
+                                        'step': 6,
+                                        'status': 'motor_b_start_requested',
+                                        'message': 'Parcel process 2 complete - Motor B start requested',
+                                        'timestamp': datetime.now().isoformat(),
+                                        'triggered_by': 'parcel_process_2_complete'
+                                    })
+                                else:
+                                    logger.error("FAILED: Could not send motor startB request")
+                                    
+                            except Exception as e:
+                                logger.error(f"Error sending motor startB request: {e}")
+                        
+                        # Start request in background thread to not block MQTT processing
+                        request_thread = threading.Thread(target=send_motor_startB_command, daemon=True)
+                        request_thread.start()
+                        
                     elif 'stopped' in message.lower():
                         logger.info("🛑 PARCEL GRABBER: Operation stopped")
                         
@@ -407,6 +523,271 @@ class MQTTListener:
                         
                 except Exception as e:
                     logger.error(f"Error processing parcel grabber status: {e}")
+                    
+            # Handle parcel1 grabber status messages (Step 4: Parcel1 grabber operations)
+            elif topic.lower() in ['esp32/parcel1/status']:
+                try:
+                    logger.info(f"PARCEL1 GRABBER STATUS: {message}")
+                    
+                    # Check for specific grabber1 status messages
+                    if "🚚 Parcel process 1 started" in message:
+                        logger.info("🤖 STEP 4 ACTIVE: Parcel grabber 1 operation initiated")
+                        
+                        # Emit grabber started status via WebSocket
+                        socketio.emit('workflow_progress', {
+                            'step': 4,
+                            'status': 'active',
+                            'message': 'Parcel grabber 1 started - beginning pickup sequence',
+                            'timestamp': datetime.now().isoformat()
+                        })
+                        
+                    elif "➡️ Moved to size checker" in message:
+                        logger.info("🔄 STEP 4 PROGRESS: Moved to size checker...")
+                        
+                        # Emit movement progress via WebSocket
+                        socketio.emit('workflow_progress', {
+                            'step': 4.2,
+                            'status': 'moving',
+                            'message': 'Moving parcel to size checker',
+                            'timestamp': datetime.now().isoformat()
+                        })
+                        
+                    elif "✅ Parcel process 1 complete" in message:
+                        logger.info("✅ STEP 4 COMPLETE: Parcel grabber 1 process complete - Starting box system...")
+                        
+                        # Send box start command when parcel process 1 is complete
+                        def send_box_start_command():
+                            try:
+                                logger.info("STEP 4.5 - PARCEL PROCESS 1 COMPLETE: Adding 5 second delay before starting box...")
+                                
+                                # Add 5 second delay as requested
+                                time.sleep(5)
+                                
+                                logger.info("STEP 4.5 - DELAY COMPLETE: Sending box start command...")
+                                
+                                # Send box start request via MQTT
+                                box_success = mqtt_listener.publish_message('esp32/box/request', 'start')
+                                if box_success:
+                                    logger.info("SUCCESS: Box START request sent (esp32/box/request > start)")
+                                    
+                                    # Emit WebSocket notification for box start
+                                    socketio.emit('workflow_progress', {
+                                        'step': 4.5,
+                                        'status': 'box_start_requested',
+                                        'message': 'Box system start requested after 5s delay',
+                                        'timestamp': datetime.now().isoformat(),
+                                        'triggered_by': 'parcel_process_1_complete'
+                                    })
+                                else:
+                                    logger.error("FAILED: Could not send box start request")
+                                    
+                            except Exception as e:
+                                logger.error(f"Error sending box start request: {e}")
+                        
+                        # Start request in background thread to not block MQTT processing
+                        request_thread = threading.Thread(target=send_box_start_command, daemon=True)
+                        request_thread.start()
+                        
+                        # Emit completion status via WebSocket
+                        socketio.emit('workflow_progress', {
+                            'step': 4,
+                            'status': 'complete',
+                            'message': 'Parcel grabber 1 process complete',
+                            'timestamp': datetime.now().isoformat()
+                        })
+                        
+                except Exception as e:
+                    logger.error(f"Error processing parcel1 grabber status: {e}")
+                    
+            # Handle box system status messages (Step 4.5: Box system operations)
+            elif topic.lower() in ['esp32/box/status']:
+                try:
+                    logger.info(f"BOX SYSTEM STATUS: {message}")
+                    
+                    # Check for sensor home position messages
+                    if "🏠 Sensor returned to home position" in message:
+                        logger.info("✅ STEP 4.75 COMPLETE: 🏠 Sensor returned to home position")
+                        
+                        # Emit sensor home position status via WebSocket
+                        socketio.emit('workflow_progress', {
+                            'step': 4.75,
+                            'status': 'complete',
+                            'message': '🏠 Sensor returned to home position',
+                            'timestamp': datetime.now().isoformat()
+                        })
+                        
+                    # Check for box completion messages
+                    elif "✅ Box process complete" in message or "complete" in message.lower():
+                        logger.info("✅ STEP 4.5 COMPLETE: Box system process complete - Starting grabber2...")
+                        
+                        # Send grabber2 start command when box process is complete
+                        def send_grabber2_start_command():
+                            try:
+                                logger.info("STEP 5 - BOX COMPLETE: Adding 5 second delay before starting grabber2...")
+                                
+                                # Add 5 second delay as requested
+                                time.sleep(5)
+                                
+                                logger.info("STEP 5 - DELAY COMPLETE: Sending grabber2 start command...")
+                                
+                                # Send grabber2 start request via MQTT
+                                grabber2_success = mqtt_listener.publish_message('esp32/grabber2/request', 'start')
+                                if grabber2_success:
+                                    logger.info("SUCCESS: Grabber2 START request sent (esp32/grabber2/request > start)")
+                                    
+                                    # Emit WebSocket notification for grabber2 start
+                                    socketio.emit('workflow_progress', {
+                                        'step': 5,
+                                        'status': 'grabber2_start_requested',
+                                        'message': 'Grabber2 start requested after 5s delay',
+                                        'timestamp': datetime.now().isoformat(),
+                                        'triggered_by': 'box_process_complete'
+                                    })
+                                    
+                                    logger.info("📦 WORKFLOW: Box complete → 5s delay → Grabber2 activated")
+                                else:
+                                    logger.error("FAILED: Could not send grabber2 start request")
+                                    
+                            except Exception as e:
+                                logger.error(f"Error sending grabber2 start request: {e}")
+                        
+                        # Start request in background thread to not block MQTT processing
+                        request_thread = threading.Thread(target=send_grabber2_start_command, daemon=True)
+                        request_thread.start()
+                        
+                        # Emit box completion status via WebSocket
+                        socketio.emit('workflow_progress', {
+                            'step': 4.5,
+                            'status': 'complete',
+                            'message': 'Box system process complete',
+                            'timestamp': datetime.now().isoformat()
+                        })
+                        
+                    elif "started" in message.lower():
+                        logger.info("🤖 STEP 4.5 ACTIVE: Box system operation initiated")
+                        
+                        # Emit box started status via WebSocket
+                        socketio.emit('workflow_progress', {
+                            'step': 4.5,
+                            'status': 'active',
+                            'message': 'Box system started',
+                            'timestamp': datetime.now().isoformat()
+                        })
+                        
+                except Exception as e:
+                    logger.error(f"Error processing box system status: {e}")
+                    
+            # Handle sensor position status (Step 4.75: Sensor returning to home position)
+            elif topic.lower() in ['esp32/sensor/position', 'esp32/sensor/home', 'esp32/position/status']:
+                try:
+                    logger.info(f"SENSOR POSITION STATUS: {message}")
+                    
+                    # Check for sensor home position messages
+                    if "🏠 Sensor returned to home position" in message or "home position" in message.lower():
+                        logger.info("✅ STEP 4.75 COMPLETE: 🏠 Sensor returned to home position")
+                        
+                        # Emit sensor home position status via WebSocket
+                        socketio.emit('workflow_progress', {
+                            'step': 4.75,
+                            'status': 'complete',
+                            'message': '🏠 Sensor returned to home position',
+                            'timestamp': datetime.now().isoformat()
+                        })
+                        
+                    elif "returning" in message.lower() or "moving to home" in message.lower():
+                        logger.info("🔄 STEP 4.75 ACTIVE: Sensor returning to home position")
+                        
+                        # Emit sensor returning status via WebSocket
+                        socketio.emit('workflow_progress', {
+                            'step': 4.75,
+                            'status': 'active',
+                            'message': 'Sensor returning to home position',
+                            'timestamp': datetime.now().isoformat()
+                        })
+                        
+                except Exception as e:
+                    logger.error(f"Error processing sensor position status: {e}")
+                    
+            # Handle parcel2 grabber status messages (Step 5: Parcel2 grabber operations)
+            elif topic.lower() in ['esp32/parcel2/status']:
+                try:
+                    logger.info(f"PARCEL2 GRABBER STATUS: {message}")
+                    
+                    # Check for specific grabber2 status messages
+                    if "📦 Parcel process 2 started" in message:
+                        logger.info("🤖 STEP 5 ACTIVE: Parcel grabber 2 operation initiated")
+                        
+                        # Emit grabber2 started status via WebSocket
+                        socketio.emit('workflow_progress', {
+                            'step': 5,
+                            'status': 'active',
+                            'message': 'Parcel grabber 2 started - beginning pickup sequence',
+                            'timestamp': datetime.now().isoformat()
+                        })
+                        
+                    elif "➡️ Moved to conveyor 2" in message:
+                        logger.info("🔄 STEP 5 PROGRESS: Moved to conveyor 2...")
+                        
+                        # Emit movement progress via WebSocket
+                        socketio.emit('workflow_progress', {
+                            'step': 5.1,
+                            'status': 'moving',
+                            'message': 'Moving parcel to conveyor 2',
+                            'timestamp': datetime.now().isoformat()
+                        })
+                        
+                    elif "↩️ Returned to conveyor belt 1" in message:
+                        logger.info("🔁 STEP 5 PROGRESS: Returned to conveyor belt 1...")
+                        
+                        # Emit return movement progress via WebSocket
+                        socketio.emit('workflow_progress', {
+                            'step': 5.2,
+                            'status': 'returning',
+                            'message': 'Returning grabber to conveyor belt 1',
+                            'timestamp': datetime.now().isoformat()
+                        })
+                        
+                    elif "✅ Parcel process 2 complete" in message:
+                        logger.info("✅ STEP 5 COMPLETE: Parcel grabber 2 process complete - Starting motor B...")
+                        
+                        # Send motor startB command when parcel process 2 is complete
+                        def send_motor_startB_command():
+                            try:
+                                logger.info("STEP 6 - PARCEL PROCESS 2 COMPLETE: Sending motor startB command...")
+                                
+                                # Send motor startB request via MQTT
+                                success = mqtt_listener.publish_message('esp32/motor/request', 'startB')
+                                if success:
+                                    logger.info("SUCCESS: Motor startB request sent (esp32/motor/request > startB)")
+                                    
+                                    # Emit WebSocket notification
+                                    socketio.emit('workflow_progress', {
+                                        'step': 6,
+                                        'status': 'motor_startB_requested',
+                                        'message': 'Parcel process 2 complete - Motor startB requested',
+                                        'timestamp': datetime.now().isoformat(),
+                                        'triggered_by': 'parcel_process_2_complete'
+                                    })
+                                else:
+                                    logger.error("FAILED: Could not send motor startB request")
+                                    
+                            except Exception as e:
+                                logger.error(f"Error sending motor startB request: {e}")
+                        
+                        # Start request in background thread to not block MQTT processing
+                        request_thread = threading.Thread(target=send_motor_startB_command, daemon=True)
+                        request_thread.start()
+                        
+                        # Emit completion status via WebSocket
+                        socketio.emit('workflow_progress', {
+                            'step': 5,
+                            'status': 'complete',
+                            'message': 'Parcel grabber 2 process complete',
+                            'timestamp': datetime.now().isoformat()
+                        })
+                        
+                except Exception as e:
+                    logger.error(f"Error processing parcel2 grabber status: {e}")
                     
         except Exception as e:
             logger.error(f"Error processing MQTT sensor data: {e}")
@@ -523,8 +904,27 @@ class MQTTListener:
             'broker_port': self.broker_port
         }
 
-# Initialize MQTT listener
-mqtt_listener = MQTTListener()
+    def send_sms_notification(self, phone_number, message):
+        """Send SMS notification via ESP32 GSM module"""
+        try:
+            # Send "start:" command with phone number to ESP32 GSM module
+            # Format: "start:+639612903652"
+            start_command = f"start:{phone_number}"
+            success = self.publish_message('esp32/gsm/send', start_command)
+            
+            if success:
+                logger.info(f"SMS send command 'start:{phone_number}' sent to ESP32")
+                return True
+            else:
+                logger.error(f"Failed to send SMS send command to ESP32")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error sending SMS notification: {e}")
+            return False
+
+# Initialize MQTT listener with correct broker IP
+mqtt_listener = MQTTListener(broker_host="10.195.139.227", broker_port=1883)
 
 # Spam filtering configuration
 LOADCELL_SPAM_FILTER = {
@@ -554,12 +954,91 @@ sensor_data_loaded = False
 # Motor restart prevention flag
 prevent_auto_motor_restart = True  # Set to True to prevent automatic motor restarts
 
+def test_gsm_sms(test_phone_number="09123456789"):
+    """Test function to send SMS via GSM module"""
+    try:
+        logger.info(f"[TEST] Testing GSM SMS functionality...")
+        logger.info(f"[TEST] Sending test SMS to: {test_phone_number}")
+        
+        message = "Your Parcel is Being Delivered"
+        sms_sent = mqtt_listener.send_sms_notification(test_phone_number, message)
+        
+        if sms_sent:
+            logger.info(f"[TEST] SMS test successful! Message sent to {test_phone_number}")
+            print(f"✅ TEST PASSED: SMS sent to {test_phone_number}")
+            print(f"📱 Message: {message}")
+            return True
+        else:
+            logger.error(f"[TEST] SMS test failed for {test_phone_number}")
+            print(f"❌ TEST FAILED: Could not send SMS to {test_phone_number}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"[TEST] Error during GSM SMS test: {e}")
+        print(f"❌ TEST ERROR: {e}")
+        return False
+
+def format_phone_number(phone_number):
+    """Format phone number to international format for GSM"""
+    if not phone_number:
+        return phone_number
+    
+    original_number = phone_number
+    # Remove any spaces, dashes, or other characters
+    phone_number = ''.join(filter(str.isdigit, phone_number))
+    
+    # Convert Philippine local format (09xxxxxxxx) to international format (+639xxxxxxxx)
+    if phone_number.startswith('09') and len(phone_number) == 11:
+        phone_number = '+63' + phone_number[1:]
+        logger.info(f"Phone number converted: {original_number} → {phone_number}")
+    elif phone_number.startswith('639') and len(phone_number) == 12:
+        phone_number = '+' + phone_number
+        logger.info(f"Phone number formatted: {original_number} → {phone_number}")
+    elif not phone_number.startswith('+'):
+        # Add + if missing for international numbers
+        phone_number = '+' + phone_number
+        logger.info(f"Phone number formatted: {original_number} → {phone_number}")
+    else:
+        logger.info(f"Phone number unchanged: {phone_number}")
+        
+    return phone_number
+
+def get_contact_number_from_qr(qr_data):
+    """Get contact number from QR data by querying the backend API"""
+    try:
+        # Query the backend API to get order details for this QR code
+        backend_url = f'http://10.195.139.225:5000/api/validate-qr-code'
+        payload = {'qr_code': qr_data}
+        
+        response = requests.post(backend_url, json=payload, timeout=10)
+        
+        if response.status_code == 200:
+            result = response.json()
+            if result.get('valid') and result.get('order'):
+                contact_number = result['order'].get('contact_number')
+                if contact_number:
+                    logger.info(f"Contact number found for QR {qr_data}: {contact_number}")
+                    return contact_number
+                else:
+                    logger.warning(f"No contact number in order for QR: {qr_data}")
+            else:
+                logger.warning(f"Invalid QR or no order found for: {qr_data}")
+        else:
+            logger.error(f"Failed to validate QR code {qr_data}: HTTP {response.status_code}")
+            
+    except requests.RequestException as e:
+        logger.error(f"Network error getting contact for QR {qr_data}: {e}")
+    except Exception as e:
+        logger.error(f"Error getting contact number for QR {qr_data}: {e}")
+        
+    return None
+
 def check_for_new_qr_scans():
     """Check for new QR code scans and clear sensor data if valid scan detected"""
     global last_scan_id, sensor_data_loaded
     
     try:
-        backend_url = 'http://192.168.100.61:5000/api/qr-scans?limit=1'
+        backend_url = 'http://10.195.139.225:5000/api/qr-scans?limit=1'
         response = requests.get(backend_url, timeout=5)
         
         if response.status_code == 200:
@@ -579,10 +1058,28 @@ def check_for_new_qr_scans():
                     
                     logger.info(f"NEW QR SCAN DETECTED: {qr_data} (Valid: {is_valid})")
                     
-                    # If valid scan and we have sensor data loaded, clear it
+                    # If valid scan and we have sensor data loaded, clear it and send SMS
                     if is_valid and sensor_data_loaded:
                         logger.info("Valid QR scan detected - clearing sensor data...")
                         clear_mqtt_sensor_data()
+                        
+                        # Get contact number and send SMS notification
+                        try:
+                            contact_number = get_contact_number_from_qr(qr_data)
+                            if contact_number:
+                                # Format the phone number properly
+                                formatted_number = format_phone_number(contact_number)
+                                message = "Your Parcel is Being Delivered"
+                                sms_sent = mqtt_listener.send_sms_notification(formatted_number, message)
+                                
+                                if sms_sent:
+                                    logger.info(f"SMS notification sent to {formatted_number} (original: {contact_number}) for QR: {qr_data}")
+                                else:
+                                    logger.error(f"Failed to send SMS notification to {formatted_number} for QR: {qr_data}")
+                            else:
+                                logger.warning(f"No contact number found for QR: {qr_data}")
+                        except Exception as e:
+                            logger.error(f"Error sending SMS notification for QR {qr_data}: {e}")
                         
                         # Emit WebSocket notification
                         socketio.emit('qr_scan_processed', {
@@ -616,7 +1113,7 @@ def clear_mqtt_sensor_data():
         mqtt_sensor_data['box_dimensions']['timestamp'] = None
         
         # Clear sensor data from main backend database
-        backend_url = 'http://192.168.100.61:5000/api/sensor-data'
+        backend_url = 'http://10.195.139.225:5000/api/sensor-data'
         response = requests.delete(backend_url, timeout=5)
         
         if response.status_code == 200:
@@ -636,7 +1133,7 @@ def start_qr_monitoring():
     
     # Initialize last_scan_id to current latest scan to avoid processing old scans
     try:
-        backend_url = 'http://192.168.100.61:5000/api/qr-scans?limit=1'
+        backend_url = 'http://10.195.139.225:5000/api/qr-scans?limit=1'
         response = requests.get(backend_url, timeout=5)
         if response.status_code == 200:
             scans = response.json()
@@ -688,7 +1185,7 @@ def store_weight_data_in_db():
     
     try:
         # Send only weight data to main backend
-        backend_url = 'http://192.168.100.61:5000/api/sensor-data'
+        backend_url = 'http://10.195.139.225:5000/api/sensor-data'
         sensor_data = {
             'weight': mqtt_sensor_data['loadcell']['weight'],
             'width': None,  # Dimensions not captured yet
@@ -708,21 +1205,16 @@ def store_weight_data_in_db():
                 weight = sensor_data['weight']
                 logger.info(f"📊 Weight captured: {weight}kg - Ready for grabber to move package")
                 
-                # Send start command to ESP32 servo after successful weight capture
-                servo_success = mqtt_listener.publish_message('esp32/parcel/request', 'start')
-                if servo_success:
-                    logger.info("🤖 STEP 4 INITIATED: Parcel grabber start command sent to ESP32")
-                    logger.info("📦 Grabber movement requested - package ready for pickup")
-                    
-                    # Emit servo start update via WebSocket
-                    socketio.emit('workflow_progress', {
-                        'step': 4,
-                        'status': 'initiated',
-                        'message': 'Parcel grabber activated - moving to package',
-                        'timestamp': datetime.now().isoformat()
-                    })
-                else:
-                    logger.error("❌ Failed to send parcel grabber start command to ESP32")
+                # Weight data stored - grabber will be triggered by QR scan or other workflow step
+                logger.info("📦 Package weight recorded - waiting for workflow trigger")
+                
+                # Emit weight capture completion via WebSocket
+                socketio.emit('workflow_progress', {
+                    'step': 3,
+                    'status': 'complete',
+                    'message': f'Weight captured: {weight}kg - Ready for next step',
+                    'timestamp': datetime.now().isoformat()
+                })
                 
                 # Emit weight capture progress update via WebSocket
                 socketio.emit('workflow_progress', {
@@ -745,7 +1237,7 @@ def update_sensor_data_with_dimensions():
     
     try:
         # Send complete sensor data to main backend (this will overwrite the weight-only entry)
-        backend_url = 'http://192.168.100.61:5000/api/sensor-data'
+        backend_url = 'http://10.195.139.225:5000/api/sensor-data'
         
         # Determine package size
         width = mqtt_sensor_data['box_dimensions']['width']
@@ -896,7 +1388,7 @@ def apply_package_data():
             return jsonify({'error': 'No order number provided'}), 400
         
         # Validate order exists by calling main backend
-        backend_url = 'http://192.168.100.61:5000/api/validate-qr'
+        backend_url = 'http://10.195.139.225:5000/api/validate-qr'
         validation_response = requests.post(backend_url, json={'qr_data': order_number}, timeout=10)
         
         if validation_response.status_code != 200:
@@ -934,7 +1426,7 @@ def apply_package_data():
         }
         
         # Send package data to main backend
-        backend_package_url = 'http://192.168.100.61:5000/api/package-information'
+        backend_package_url = 'http://10.195.139.225:5000/api/package-information'
         package_response = requests.post(backend_package_url, json=package_data, timeout=10)
         
         if package_response.status_code == 200 or package_response.status_code == 201:
@@ -1118,18 +1610,18 @@ def stop_motor():
                 'message': 'Cannot stop motor - MQTT broker not connected'
             }), 503
         
-        logger.info("✅ MQTT is connected, sending stop command...")
+        logger.info("✅ MQTT is connected, sending stopA command...")
         
-        # Publish stop command to ESP32
-        success = mqtt_listener.publish_message('esp32/motor/request', 'stop')
+        # Publish stopA command to ESP32
+        success = mqtt_listener.publish_message('esp32/motor/request', 'stopA')
         
         if success:
-            logger.info("🛑 Motor stopped via MQTT command")
+            logger.info("🛑 Motor A stopped via MQTT command (stopA)")
             # Emit WebSocket notification
             socketio.emit('system_command', {
                 'command': 'stop_motor',
                 'status': 'success',
-                'message': 'Motor stopped',
+                'message': 'Motor A stopped',
                 'timestamp': datetime.now().isoformat()
             })
             
@@ -1696,7 +2188,7 @@ def validate_qr():
             return jsonify({'valid': False, 'message': 'No QR data provided'}), 400
         
         # Forward the validation request to the main backend server
-        backend_url = 'http://192.168.100.61:5000/api/validate-qr'
+        backend_url = 'http://10.195.139.225:5000/api/validate-qr'
         response = requests.post(backend_url, json={'qr_data': qr_data}, timeout=10)
         
         if response.status_code == 200:
@@ -1724,6 +2216,36 @@ def validate_qr():
 def on_qr_detected(qr_data, validation_result):
     """Callback function called when new QR is detected"""
     try:
+        # Check if QR code is valid and print receipt without QR code
+        if validation_result.get('valid'):
+            # Print receipt without QR code immediately
+            try:
+                # Prepare order data for printing (convert from validation_result format)
+                receipt_data = {
+                    'orderNumber': validation_result.get('order_number', qr_data),
+                    'customerName': validation_result.get('customer_name', 'N/A'),
+                    'productName': validation_result.get('product_name', 'N/A'),
+                    'amount': str(validation_result.get('amount', '0.00')),
+                    'date': validation_result.get('date', datetime.now().strftime('%Y-%m-%d')),
+                    'address': validation_result.get('address', 'N/A'),
+                    'contactNumber': validation_result.get('contact_number', 'N/A'),
+                    'email': validation_result.get('email', '')
+                }
+                
+                # Create and print receipt without QR code
+                receipt = printer.create_receipt(receipt_data)
+                if receipt:
+                    success, message = printer.print_receipt(receipt)
+                    if success:
+                        logger.info(f"Receipt printed successfully for order {qr_data}")
+                    else:
+                        logger.error(f"Failed to print receipt for order {qr_data}: {message}")
+                else:
+                    logger.error(f"Failed to create receipt for order {qr_data}")
+                    
+            except Exception as print_error:
+                logger.error(f"Error printing receipt for QR {qr_data}: {print_error}")
+        
         # Get the latest history to include image data
         history = camera.get_qr_history()
         latest_scan = history[0] if history else None
@@ -1748,7 +2270,7 @@ def on_qr_detected(qr_data, validation_result):
                     }
                     
                     # Send package data to main backend
-                    backend_package_url = 'http://192.168.100.61:5000/api/package-information'
+                    backend_package_url = 'http://10.195.139.225:5000/api/package-information'
                     package_response = requests.post(backend_package_url, json=package_data, timeout=10)
                     
                     if package_response.status_code in [200, 201]:
@@ -2166,7 +2688,7 @@ def simulate_qr_scan():
         qr_code = data.get('qr_code', 'ORD-001')
         
         # Validate the QR code using the same method as camera
-        backend_url = 'http://192.168.100.61:5000/api/validate-qr'
+        backend_url = 'http://10.195.139.225:5000/api/validate-qr'
         validation_response = requests.post(backend_url, json={'qr_data': qr_code}, timeout=10)
         
         if validation_response.status_code == 200:
@@ -2251,7 +2773,7 @@ def test_qr_image():
         img_base64 = base64.b64encode(buffer).decode('utf-8')
         
         # Validate the QR code
-        backend_url = 'http://192.168.100.61:5000/api/validate-qr'
+        backend_url = 'http://10.195.139.225:5000/api/validate-qr'
         try:
             validation_response = requests.post(backend_url, json={'qr_data': qr_code}, timeout=10)
             if validation_response.status_code == 200:
@@ -2338,6 +2860,9 @@ if __name__ == '__main__':
         logger.info("QR scan monitoring started at startup")
     except Exception as e:
         logger.error(f"Failed to start QR scan monitoring at startup: {str(e)}")
+    
+    # Test GSM SMS functionality (uncomment the line below to test)
+    # test_gsm_sms("09123456789")  # Replace with your test phone number
     
     # Run the server with SocketIO - simplified configuration
     logger.info("Starting Flask-SocketIO server with integrated MQTT listener and QR monitoring")
