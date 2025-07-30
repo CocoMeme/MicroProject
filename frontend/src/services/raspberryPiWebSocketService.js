@@ -11,7 +11,7 @@ class RaspberryPiWebSocketService {
     this.printPromises = new Map(); // Track print requests
   }
 
-  connect(url = process.env.REACT_APP_RASPI_WEBSOCKET_URL || 'http://10.195.139.227:5001') {
+  connect(url = process.env.REACT_APP_RASPI_WEBSOCKET_URL || 'http://10.194.125.227:5001') {
     if (this.socket?.connected) {
       return Promise.resolve();
     }

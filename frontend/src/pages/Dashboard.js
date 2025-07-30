@@ -130,7 +130,7 @@ export default function Dashboard() {
         persistent: true,
       });
       
-      const response = await fetch(`${process.env.REACT_APP_API_ENDPOINT || 'http://10.195.139.225:5000/api'}/system/start`, {
+      const response = await fetch(`${process.env.REACT_APP_API_ENDPOINT || 'http://10.194.125.225:5000/api'}/system/start`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -177,7 +177,7 @@ export default function Dashboard() {
     }
   };
 
-  // Stop the motor system
+  // Stop all systems
   const stopSystem = async () => {
     const now = Date.now();
     if (stoppingSystem || (now - lastActionTime < 2000)) return; // Prevent rapid clicks
@@ -187,20 +187,20 @@ export default function Dashboard() {
       setLastActionTime(now);
       
       // Clear any existing system-related notifications
-      clearNotificationsBy({ title: '🛑 Stopping System' });
-      clearNotificationsBy({ title: '🛑 System Stopped Successfully' });
+      clearNotificationsBy({ title: '🛑 Stopping All Systems' });
+      clearNotificationsBy({ title: '🛑 All Systems Stopped Successfully' });
       clearNotificationsBy({ title: '⚠️ System Stop Failed' });
       
       // Show loading notification
       const loadingNotificationId = showNotification({
-        title: '🛑 Stopping System',
-        message: 'Safely shutting down motor system...',
-        severity: 'info',
+        title: '🛑 Stopping All Systems',
+        message: 'Emergency stop - Shutting down all MQTT systems...',
+        severity: 'warning',
         type: 'system',
         persistent: true,
       });
       
-      const response = await fetch(`${process.env.REACT_APP_API_ENDPOINT || 'http://10.195.139.227:5000/api'}/system/stop`, {
+      const response = await fetch(`${process.env.REACT_APP_API_ENDPOINT || 'http://10.194.125.225:5000/api'}/system/stop`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -215,32 +215,32 @@ export default function Dashboard() {
       }
 
       if (response.ok) {
-        console.log('✅ Motor system stopped successfully:', data);
+        console.log('✅ All systems stopped successfully:', data);
         showNotification({
-          title: '🛑 System Stopped Successfully',
-          message: `${data.message || 'Motor system has been safely shut down'}`,
+          title: '🛑 All Systems Stopped Successfully',
+          message: `${data.message || 'All MQTT systems have been safely shut down'}`,
           severity: 'success',
           type: 'system',
-          duration: 10000,
+          duration: 12000,
         });
       } else {
-        console.error('❌ Failed to stop motor system:', data);
+        console.error('❌ Failed to stop all systems:', data);
         showNotification({
           title: '⚠️ System Stop Failed',
-          message: `${data.message || data.error || 'Unable to stop system - manual intervention may be required'}`,
+          message: `${data.message || data.error || 'Unable to stop systems - manual intervention may be required'}`,
           severity: 'error',
           type: 'system',
-          duration: 10000,
+          duration: 15000,
         });
       }
     } catch (error) {
-      console.error('❌ Error stopping motor system:', error);
+      console.error('❌ Error stopping all systems:', error);
       showNotification({
-        title: '🔌 Connection Error (Stop)',
+        title: '🔌 Connection Error (Emergency Stop)',
         message: `${error.message || 'Unable to connect to system - check network connection'}`,
         severity: 'error',
         type: 'system',
-        duration: 10000,
+        duration: 15000,
       });
     } finally {
       setStoppingSystem(false);
@@ -293,7 +293,7 @@ export default function Dashboard() {
       loading: startingSystem
     },
     { 
-      label: 'Stop System', 
+      label: 'Emergency Stop', 
       icon: <StopIcon />, 
       color: 'error',
       variant: 'contained',
@@ -588,7 +588,7 @@ export default function Dashboard() {
                           >
                             {button.loading ? 
                               (button.label === 'Start System' ? 'Starting System...' : 
-                               button.label === 'Stop System' ? 'Stopping System...' : 
+                               button.label === 'Emergency Stop' ? 'Stopping All Systems...' : 
                                button.label) : 
                               button.label
                             }

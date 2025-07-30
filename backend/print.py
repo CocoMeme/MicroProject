@@ -7,6 +7,10 @@ import pygame
 import threading
 import time
 import logging
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -162,7 +166,27 @@ class ReceiptPrinter:
             return None
 
     def _play_success_sound(self):
-        """Play success sound in a separate thread to avoid blocking"""
+        """Play success sound for QR code scanning in a separate thread to avoid blocking"""
+        def play_sound():
+            try:
+                if pygame.mixer.get_init():
+                    sound_path = "/home/test/Desktop/sound/success_receipt.mp3"
+                    if os.path.exists(sound_path):
+                        sound = pygame.mixer.Sound(sound_path)
+                        sound.play()
+                        logger.info("Success receipt sound played (QR code scanning)")
+                    else:
+                        logger.warning(f"Sound file not found: {sound_path}")
+                else:
+                    logger.warning("Pygame mixer not initialized")
+            except Exception as e:
+                logger.error(f"Failed to play success receipt sound: {e}")
+        
+        # Play sound in background thread to avoid blocking
+        threading.Thread(target=play_sound, daemon=True).start()
+
+    def _play_receipt_sound(self):
+        """Play success sound for printing QR code only in a separate thread to avoid blocking"""
         def play_sound():
             try:
                 if pygame.mixer.get_init():
@@ -170,7 +194,7 @@ class ReceiptPrinter:
                     if os.path.exists(sound_path):
                         sound = pygame.mixer.Sound(sound_path)
                         sound.play()
-                        logger.info("Success sound played")
+                        logger.info("Success sound played (QR code printing)")
                     else:
                         logger.warning(f"Sound file not found: {sound_path}")
                 else:
@@ -181,7 +205,7 @@ class ReceiptPrinter:
         # Play sound in background thread to avoid blocking
         threading.Thread(target=play_sound, daemon=True).start()
 
-    def print_receipt(self, receipt):
+    def print_receipt(self, receipt, is_qr_only=False):
         """Print receipt with thread safety and better error handling"""
         if not receipt:
             return False, "No receipt to print"
@@ -236,7 +260,13 @@ class ReceiptPrinter:
 
                         # If we get here, printing succeeded
                         logger.info("Receipt printed successfully")
-                        self._play_success_sound()
+                        
+                        # Play appropriate sound based on print type
+                        if is_qr_only:
+                            self._play_success_sound()  # QR code sound
+                        else:
+                            self._play_receipt_sound()  # Receipt details sound
+                            
                         return True, "Print successful"
 
                     except (IOError, OSError) as e:
@@ -287,7 +317,7 @@ class ReceiptPrinter:
             if not qr_image:
                 return False, "Failed to create QR code"
             
-            success, message = self.print_receipt(qr_image)
+            success, message = self.print_receipt(qr_image, is_qr_only=True)
             if success:
                 logger.info(f"QR code printed successfully for order {order_number}")
             return success, message
@@ -295,6 +325,22 @@ class ReceiptPrinter:
         except Exception as e:
             logger.error(f"Error printing QR code: {e}")
             return False, f"Print QR failed: {str(e)}"
+
+    def print_receipt_details(self, order_data):
+        """Print receipt with order details (no QR code)"""
+        try:
+            receipt_image = self.create_receipt(order_data)
+            if not receipt_image:
+                return False, "Failed to create receipt"
+            
+            success, message = self.print_receipt(receipt_image, is_qr_only=False)
+            if success:
+                logger.info(f"Receipt details printed successfully for order {order_data.get('orderNumber', 'Unknown')}")
+            return success, message
+            
+        except Exception as e:
+            logger.error(f"Error printing receipt details: {e}")
+            return False, f"Print receipt details failed: {str(e)}"
 
     def check_printer(self):
         """Check if printer device is available"""

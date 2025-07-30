@@ -41,7 +41,7 @@ const Products = () => {
     setLoading(true);
     
     try {
-      const response = await axios.post(`${process.env.REACT_APP_API_ENDPOINT || 'http://10.195.139.225:5000/api'}/manual-orders`, formData);
+      const response = await axios.post(`${process.env.REACT_APP_API_ENDPOINT || 'http://10.194.125.225:5000/api'}/manual-orders`, formData);
       setSnackbar({
         open: true,
         message: 'Order placed successfully!',

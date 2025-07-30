@@ -51,8 +51,8 @@ import ErrorIcon from '@mui/icons-material/Error';
 import WarningIcon from '@mui/icons-material/Warning';
 import websocketService from '../services/websocketService';
 
-const RASPI_SERVER = process.env.REACT_APP_RASPI_BASE_URL || 'http://10.195.139.227:5001';
-const BACKEND_SERVER = process.env.REACT_APP_API_BASE_URL || 'http://10.195.139.225:5000';
+const RASPI_SERVER = process.env.REACT_APP_RASPI_BASE_URL || 'http://10.194.125.227:5001';
+const BACKEND_SERVER = process.env.REACT_APP_API_BASE_URL || 'http://10.194.125.225:5000';
 
 // Debug logging
 console.log('Environment Variables:', {

@@ -13,6 +13,10 @@ import requests
 import os
 import os
 import re
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Configure logging with improved format and separate levels
 logging.basicConfig(
@@ -28,6 +32,30 @@ logger = logging.getLogger(__name__)
 # Set specific log levels for different components
 logging.getLogger('paho').setLevel(logging.WARNING)  # Reduce MQTT client verbosity
 logging.getLogger('werkzeug').setLevel(logging.WARNING)  # Reduce Flask verbosity
+
+# Suppress ZBar decoder warnings
+import sys
+import warnings
+
+# Suppress ZBar warnings at the Python level
+warnings.filterwarnings("ignore", message=".*zbar.*")
+warnings.filterwarnings("ignore", message=".*databar.*")
+
+# Filter ZBar warnings from stderr output
+class StderrFilter:
+    def __init__(self):
+        self.original_stderr = sys.stderr
+        
+    def write(self, s):
+        # Filter out ZBar decoder warnings
+        if '_zbar_decode_databar: Assertion' not in s and 'decoder/databar.c' not in s and 'WARNING: decoder/databar.c' not in s:
+            self.original_stderr.write(s)
+            
+    def flush(self):
+        self.original_stderr.flush()
+
+# Apply stderr filter to suppress ZBar C library warnings
+sys.stderr = StderrFilter()
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your-secret-key-raspi'
@@ -105,12 +133,21 @@ class MQTTListener:
                             weight = float(weight_match.group(1))
                             logger.info(f"LOADCELL: Parsed formatted weight: {weight}g from message: {message}")
                             
-                            # Send grabber start command when final weight is received
-                            def send_grabber_start_command():
+                            # Store weight in database first, then start grabber1
+                            def process_final_weight():
                                 try:
-                                    logger.info("STEP 4 - FINAL WEIGHT COMPLETE: Sending grabber start command...")
+                                    logger.info("STEP 3 - FINAL WEIGHT RECEIVED: Storing in database...")
                                     
-                                    # Send grabber start request via MQTT
+                                    # Store weight data in database
+                                    mqtt_sensor_data['loadcell']['weight'] = weight
+                                    mqtt_sensor_data['loadcell']['timestamp'] = datetime.now().isoformat()
+                                    
+                                    # Store weight in loaded_sensor_data database
+                                    store_weight_data_in_db()
+                                    
+                                    logger.info("STEP 4 - WEIGHT STORED: Starting Grabber1...")
+                                    
+                                    # Send grabber1 start request via MQTT
                                     success = mqtt_listener.publish_message('esp32/grabber1/request', 'start')
                                     if success:
                                         logger.info("SUCCESS: Grabber1 START request sent (esp32/grabber1/request > start)")
@@ -118,8 +155,8 @@ class MQTTListener:
                                         # Emit WebSocket notification
                                         socketio.emit('workflow_progress', {
                                             'step': 4,
-                                            'status': 'grabber_start_requested',
-                                            'message': 'Final weight received - Grabber1 start requested',
+                                            'status': 'grabber1_start_requested',
+                                            'message': 'Weight stored in DB - Grabber1 start requested',
                                             'timestamp': datetime.now().isoformat(),
                                             'triggered_by': 'loadcell_final_weight',
                                             'weight': weight
@@ -128,10 +165,10 @@ class MQTTListener:
                                         logger.error("FAILED: Could not send grabber1 start request")
                                         
                                 except Exception as e:
-                                    logger.error(f"Error sending grabber1 start request: {e}")
+                                    logger.error(f"Error processing final weight: {e}")
                             
-                            # Start request in background thread to not block MQTT processing
-                            request_thread = threading.Thread(target=send_grabber_start_command, daemon=True)
+                            # Start processing in background thread
+                            request_thread = threading.Thread(target=process_final_weight, daemon=True)
                             request_thread.start()
                     else:
                         # Try to parse as direct numeric value
@@ -356,6 +393,55 @@ class MQTTListener:
                         # Execute Motor B stop request in background thread
                         motor_b_thread = threading.Thread(target=send_motor_b_stop, daemon=True)
                         motor_b_thread.start()
+                    
+                    # Check for Motor B stopped message  
+                    elif 'Motor B stopped' in message or 'stopB' in message.lower():
+                        logger.info(f"STEP - MOTOR B: Motor B stopped successfully")
+                        
+                        # Emit WebSocket notification for Motor B stopped
+                        socketio.emit('workflow_progress', {
+                            'step': 'motor_b_stopped',
+                            'status': 'motor_b_stopped_complete',
+                            'message': 'Motor B stopped successfully',
+                            'timestamp': datetime.now().isoformat(),
+                            'triggered_by': 'motor_b_stop_complete'
+                        })
+                        
+                        logger.info("✅ WORKFLOW: Motor B stopped successfully")
+                    
+                    # Check for Motor B timeout or restart messages
+                    elif 'timeout' in message.lower() and 'motor b' in message.lower():
+                        logger.warning(f"⚠️ MOTOR B TIMEOUT: {message}")
+                        
+                        # Attempt to restart Motor B
+                        def restart_motor_b():
+                            try:
+                                logger.info("🔄 MOTOR B RESTART: Attempting to restart Motor B...")
+                                
+                                # Send motor startB request via MQTT
+                                motor_b_restart_success = mqtt_listener.publish_message('esp32/motor/request', 'startB')
+                                if motor_b_restart_success:
+                                    logger.info("SUCCESS: Motor B RESTART request sent (esp32/motor/request > startB)")
+                                    
+                                    # Emit WebSocket notification for Motor B restart
+                                    socketio.emit('workflow_progress', {
+                                        'step': 'motor_b_restart',
+                                        'status': 'motor_b_restart_requested',
+                                        'message': 'Motor B restart requested after timeout',
+                                        'timestamp': datetime.now().isoformat(),
+                                        'triggered_by': 'motor_b_timeout'
+                                    })
+                                    
+                                    logger.info("🔄 WORKFLOW: Motor B timeout → Restart requested")
+                                else:
+                                    logger.error("FAILED: Could not send Motor B restart request")
+                                    
+                            except Exception as e:
+                                logger.error(f"Error restarting Motor B: {e}")
+                        
+                        # Execute Motor B restart in background thread
+                        restart_thread = threading.Thread(target=restart_motor_b, daemon=True)
+                        restart_thread.start()
                     
                     # Check for object detection message (existing Motor B logic)
                     elif '📍 Object detected! Motor B paused' in message:
@@ -604,6 +690,51 @@ class MQTTListener:
                 try:
                     logger.info(f"BOX SYSTEM STATUS: {message}")
                     
+                    # Parse box dimensions from status message (e.g., "W: 6.87 in, L: 7.07 in, H: 5.83 in → 📦 Large")
+                    if 'W:' in message and 'L:' in message and 'H:' in message and 'in' in message:
+                        try:
+                            # Extract dimensions using regex (handle negative values)
+                            import re
+                            width_match = re.search(r'W:\s*([-]?[0-9.]+)\s*in', message)
+                            length_match = re.search(r'L:\s*([-]?[0-9.]+)\s*in', message)
+                            height_match = re.search(r'H:\s*([-]?[0-9.]+)\s*in', message)
+                            
+                            if width_match and length_match and height_match:
+                                # Store actual sensor values in inches (no conversion)
+                                width_inches = float(width_match.group(1))
+                                length_inches = float(length_match.group(1))
+                                height_inches = float(height_match.group(1))
+                                
+                                logger.info(f"RAW SENSOR VALUES: W:{width_inches:.2f}in, L:{length_inches:.2f}in, H:{height_inches:.2f}in")
+                                
+                                # Log info about negative values but keep them as-is
+                                if width_inches <= 0 or length_inches <= 0 or height_inches <= 0:
+                                    logger.info(f"ℹ️ RAW SENSOR DATA: Negative/zero values detected - storing as-is")
+                                
+                                # Store raw sensor values in inches (no conversion to cm)
+                                mqtt_sensor_data['box_dimensions']['width'] = width_inches
+                                mqtt_sensor_data['box_dimensions']['height'] = height_inches
+                                mqtt_sensor_data['box_dimensions']['length'] = length_inches
+                                mqtt_sensor_data['box_dimensions']['timestamp'] = datetime.now().isoformat()
+                                
+                                logger.info(f"STEP 5 - SIZE SENSOR: Raw sensor values stored - W:{width_inches:.2f}in, H:{height_inches:.2f}in, L:{length_inches:.2f}in")
+                                
+                                # Determine package size category using raw inch values
+                                package_size = determine_package_size(width_inches, length_inches, height_inches)
+                                logger.info(f"PACKAGE SIZE DETERMINED: {package_size}")
+                                
+                                # Update existing weight record with dimensions
+                                update_sensor_data_with_dimensions()
+                                
+                        except Exception as e:
+                            logger.error(f"Error parsing box dimensions from status: {e}")
+                            logger.error(f"Failed to parse message: {message}")
+                            # Check if message contains dimensions but in unexpected format
+                            if 'W:' in message and 'L:' in message and 'H:' in message:
+                                logger.warning("⚠️ Box dimensions detected but parsing failed - check message format")
+                            else:
+                                logger.info("ℹ️ Box status message doesn't contain dimensions")
+                    
                     # Check for sensor home position messages
                     if "🏠 Sensor returned to home position" in message:
                         logger.info("✅ STEP 4.75 COMPLETE: 🏠 Sensor returned to home position")
@@ -618,17 +749,61 @@ class MQTTListener:
                         
                     # Check for box completion messages
                     elif "✅ Box process complete" in message or "complete" in message.lower():
-                        logger.info("✅ STEP 4.5 COMPLETE: Box system process complete - Starting grabber2...")
+                        logger.info("✅ STEP 5 - BOX COMPLETE: Box system process complete - Storing size data...")
                         
-                        # Send grabber2 start command when box process is complete
-                        def send_grabber2_start_command():
+                        # Store box system status and dimensions in database, then start grabber2
+                        def process_box_completion():
                             try:
-                                logger.info("STEP 5 - BOX COMPLETE: Adding 5 second delay before starting grabber2...")
+                                logger.info("STEP 5.1 - BOX COMPLETION: Storing box system status in loaded_sensor_data...")
                                 
-                                # Add 5 second delay as requested
-                                time.sleep(5)
+                                # Update sensor data with box system status
+                                # The box dimensions should already be stored from the box status parsing above
+                                update_sensor_data_with_dimensions()
                                 
-                                logger.info("STEP 5 - DELAY COMPLETE: Sending grabber2 start command...")
+                                # Store box system completion status
+                                mqtt_sensor_data['box_system'] = {
+                                    'status': 'complete',
+                                    'timestamp': datetime.now().isoformat()
+                                }
+                                
+                                # Get package size from stored sensor data for stepper command
+                                width = mqtt_sensor_data['box_dimensions'].get('width', 0)
+                                height = mqtt_sensor_data['box_dimensions'].get('height', 0)
+                                length = mqtt_sensor_data['box_dimensions'].get('length', 0)
+                                
+                                if width > 0 and height > 0 and length > 0:
+                                    # Determine package size category
+                                    package_size = determine_package_size(width, height, length)
+                                    logger.info(f"PACKAGE SIZE DETERMINED: {package_size}")
+                                    
+                                    # Send stepper command with package size (small/medium/large)
+                                    logger.info(f"STEP 5.2 - SENDING STEPPER: Requesting stepper to position for {package_size.lower()} package...")
+                                    stepper_command = package_size.lower()  # small, medium, or large
+                                    stepper_success = mqtt_listener.publish_message('esp32/stepper/request', stepper_command)
+                                    
+                                    if stepper_success:
+                                        logger.info(f"SUCCESS: Stepper {stepper_command} request sent (esp32/stepper/request > {stepper_command})")
+                                        
+                                        # Store current stepper size for later back command
+                                        mqtt_sensor_data['stepper']['current_size'] = package_size
+                                        
+                                        # Emit WebSocket notification for stepper positioning
+                                        socketio.emit('workflow_progress', {
+                                            'step': 5.2,
+                                            'status': 'stepper_positioning',
+                                            'message': f'Stepper positioning for {package_size} package',
+                                            'timestamp': datetime.now().isoformat(),
+                                            'package_size': package_size,
+                                            'triggered_by': 'box_process_complete'
+                                        })
+                                        
+                                        logger.info(f"📦 WORKFLOW: Box complete → Size stored in DB → Stepper positioning for {package_size}")
+                                    else:
+                                        logger.error(f"FAILED: Could not send stepper {stepper_command} request")
+                                else:
+                                    logger.warning("No valid box dimensions found for stepper command")
+                                
+                                logger.info("STEP 6 - BOX DATA STORED: Starting Grabber2...")
                                 
                                 # Send grabber2 start request via MQTT
                                 grabber2_success = mqtt_listener.publish_message('esp32/grabber2/request', 'start')
@@ -637,29 +812,29 @@ class MQTTListener:
                                     
                                     # Emit WebSocket notification for grabber2 start
                                     socketio.emit('workflow_progress', {
-                                        'step': 5,
+                                        'step': 6,
                                         'status': 'grabber2_start_requested',
-                                        'message': 'Grabber2 start requested after 5s delay',
+                                        'message': 'Box data stored - Grabber2 start requested',
                                         'timestamp': datetime.now().isoformat(),
                                         'triggered_by': 'box_process_complete'
                                     })
                                     
-                                    logger.info("📦 WORKFLOW: Box complete → 5s delay → Grabber2 activated")
+                                    logger.info("📦 WORKFLOW: Box complete → Size stored in DB → Grabber2 activated")
                                 else:
                                     logger.error("FAILED: Could not send grabber2 start request")
                                     
                             except Exception as e:
-                                logger.error(f"Error sending grabber2 start request: {e}")
+                                logger.error(f"Error processing box completion: {e}")
                         
-                        # Start request in background thread to not block MQTT processing
-                        request_thread = threading.Thread(target=send_grabber2_start_command, daemon=True)
+                        # Start processing in background thread
+                        request_thread = threading.Thread(target=process_box_completion, daemon=True)
                         request_thread.start()
                         
                         # Emit box completion status via WebSocket
                         socketio.emit('workflow_progress', {
-                            'step': 4.5,
+                            'step': 5,
                             'status': 'complete',
-                            'message': 'Box system process complete',
+                            'message': 'Box system process complete - Storing size data',
                             'timestamp': datetime.now().isoformat()
                         })
                         
@@ -707,6 +882,143 @@ class MQTTListener:
                         
                 except Exception as e:
                     logger.error(f"Error processing sensor position status: {e}")
+                    
+            # Handle stepper status messages 
+            elif topic.lower() in ['esp32/stepper/status']:
+                try:
+                    logger.info(f"STEPPER STATUS: {message}")
+                    
+                    # Update stepper status in sensor data
+                    mqtt_sensor_data['stepper']['status'] = message
+                    mqtt_sensor_data['stepper']['timestamp'] = datetime.now().isoformat()
+                    
+                    # Check for stepper back command completion (smallback, mediumback, largeback)
+                    if ("smallback" in message.lower() or "mediumback" in message.lower() or "largeback" in message.lower()) and \
+                       ("complete" in message.lower() or "done" in message.lower() or "finished" in message.lower()):
+                        logger.info("✅ STEPPER BACK PROCESS COMPLETE: Starting emergency stop and loop restart...")
+                        
+                        # Start the stop-all and restart sequence
+                        def stop_and_restart_sequence():
+                            try:
+                                logger.info("🛑 LOOP RESTART: Starting emergency stop of all systems...")
+                                
+                                # Stop all MQTT systems
+                                stop_commands = [
+                                    ('esp32/motor/request', 'stopA', 'Motor A'),
+                                    ('esp32/motor/request', 'stopB', 'Motor B'), 
+                                    ('esp32/grabber1/request', 'stop', 'Grabber 1'),
+                                    ('esp32/grabber2/request', 'stop', 'Grabber 2'),
+                                    ('esp32/actuator/request', 'stop', 'Actuator'),
+                                    ('esp32/loadcell/request', 'stop', 'Load Cell'),
+                                    ('esp32/box/request', 'stop', 'Box System'),
+                                    ('esp32/stepper/request', 'stop', 'Stepper Motor'),
+                                    ('esp32/gsm/request', 'stop', 'GSM Module')
+                                ]
+                                
+                                # Send stop commands to all systems
+                                stopped_count = 0
+                                for topic, command, system_name in stop_commands:
+                                    try:
+                                        success = mqtt_listener.publish_message(topic, command)
+                                        if success:
+                                            logger.info(f"🛑 {system_name} stopped (esp32 stop sequence)")
+                                            stopped_count += 1
+                                        else:
+                                            logger.error(f"❌ Failed to stop {system_name}")
+                                    except Exception as e:
+                                        logger.error(f"❌ Error stopping {system_name}: {e}")
+                                
+                                logger.info(f"🛑 STOP COMPLETE: {stopped_count}/{len(stop_commands)} systems stopped")
+                                
+                                # Clear all sensor data to reset system state
+                                clear_mqtt_sensor_data()
+                                logger.info("🧹 Sensor data cleared for loop restart")
+                                
+                                # Wait 3 seconds for systems to fully stop
+                                logger.info("⏳ LOOP RESTART: Waiting 3 seconds for systems to stop...")
+                                time.sleep(3)
+                                
+                                # Start the loop again with motor startA
+                                logger.info("🔄 LOOP RESTART: Sending motor startA to begin new cycle...")
+                                restart_success = mqtt_listener.publish_message('esp32/motor/request', 'startA')
+                                
+                                if restart_success:
+                                    logger.info("✅ LOOP RESTARTED: Motor startA sent - New cycle begun (esp32/motor/request > startA)")
+                                    
+                                    # Emit WebSocket notification about loop restart
+                                    socketio.emit('workflow_restart', {
+                                        'message': 'System loop restarted after stepper back completion',
+                                        'stopped_systems': stopped_count,
+                                        'total_systems': len(stop_commands),
+                                        'timestamp': datetime.now().isoformat()
+                                    })
+                                    
+                                else:
+                                    logger.error("❌ FAILED to restart loop - Could not send motor startA command")
+                                    
+                            except Exception as e:
+                                logger.error(f"Error in stop and restart sequence: {e}")
+                        
+                        # Start stop and restart sequence in background thread
+                        threading.Thread(target=stop_and_restart_sequence, daemon=True).start()
+                        
+                        # Emit WebSocket notification about back completion
+                        socketio.emit('workflow_progress', {
+                            'step': 'stepper_back_complete',
+                            'status': 'complete',
+                            'message': 'Stepper back process complete - Restarting system loop',
+                            'timestamp': datetime.now().isoformat()
+                        })
+                    
+                    # Check for regular stepper completion messages (forward commands)
+                    elif "complete" in message.lower() or "done" in message.lower() or "finished" in message.lower():
+                        logger.info("✅ STEPPER PROCESS COMPLETE: Starting motor sequence...")
+                        
+                        # Start motor with 5 second delay
+                        def start_motor_sequence():
+                            try:
+                                logger.info("MOTOR SEQUENCE: Adding 5 second delay before starting motor...")
+                                time.sleep(5)
+                                
+                                logger.info("MOTOR SEQUENCE: Sending motor startB command...")
+                                success = mqtt_listener.publish_message('esp32/motor/request', 'startB')
+                                if success:
+                                    logger.info("SUCCESS: Motor startB request sent (esp32/motor/request > startB)")
+                                    
+                                    # Get current stepper size to determine back command
+                                    current_size = mqtt_sensor_data['stepper'].get('current_size')
+                                    if current_size:
+                                        # Wait another 5 seconds then send back command
+                                        time.sleep(5)
+                                        back_command = f"{current_size.lower()}back"
+                                        
+                                        logger.info(f"STEPPER BACK SEQUENCE: Sending {back_command} command...")
+                                        back_success = mqtt_listener.publish_message('esp32/stepper/request', back_command)
+                                        if back_success:
+                                            logger.info(f"SUCCESS: Stepper back request sent (esp32/stepper/request > {back_command})")
+                                        else:
+                                            logger.error(f"FAILED: Could not send stepper back command {back_command}")
+                                    else:
+                                        logger.warning("WARNING: No current stepper size available for back command")
+                                else:
+                                    logger.error("FAILED: Could not send motor startB command")
+                                    
+                            except Exception as e:
+                                logger.error(f"Error in motor sequence: {e}")
+                        
+                        # Start motor sequence in background thread
+                        threading.Thread(target=start_motor_sequence, daemon=True).start()
+                        
+                        # Emit WebSocket notification
+                        socketio.emit('workflow_progress', {
+                            'step': 'stepper_complete',
+                            'status': 'complete',
+                            'message': 'Stepper process complete - Starting motor sequence',
+                            'timestamp': datetime.now().isoformat()
+                        })
+                        
+                except Exception as e:
+                    logger.error(f"Error processing stepper status: {e}")
                     
             # Handle parcel2 grabber status messages (Step 5: Parcel2 grabber operations)
             elif topic.lower() in ['esp32/parcel2/status']:
@@ -924,7 +1236,11 @@ class MQTTListener:
             return False
 
 # Initialize MQTT listener with correct broker IP
-mqtt_listener = MQTTListener(broker_host="10.195.139.227", broker_port=1883)
+# Initialize and start MQTT listener
+mqtt_listener = MQTTListener(
+    broker_host=os.getenv('MQTT_BROKER_HOST', '10.194.125.227'), 
+    broker_port=int(os.getenv('MQTT_BROKER_PORT', '1883'))
+)
 
 # Spam filtering configuration
 LOADCELL_SPAM_FILTER = {
@@ -943,6 +1259,11 @@ mqtt_sensor_data = {
         'width': None,
         'height': None, 
         'length': None,
+        'timestamp': None
+    },
+    'stepper': {
+        'status': None,
+        'current_size': None,
         'timestamp': None
     }
 }
@@ -1007,7 +1328,7 @@ def get_contact_number_from_qr(qr_data):
     """Get contact number from QR data by querying the backend API"""
     try:
         # Query the backend API to get order details for this QR code
-        backend_url = f'http://10.195.139.225:5000/api/validate-qr-code'
+        backend_url = f'{os.getenv("BACKEND_URL", "http://10.194.125.225:5000")}/api/validate-qr-code'
         payload = {'qr_code': qr_data}
         
         response = requests.post(backend_url, json=payload, timeout=10)
@@ -1038,7 +1359,7 @@ def check_for_new_qr_scans():
     global last_scan_id, sensor_data_loaded
     
     try:
-        backend_url = 'http://10.195.139.225:5000/api/qr-scans?limit=1'
+        backend_url = f'{os.getenv("BACKEND_URL", "http://10.194.125.225:5000")}/api/qr-scans?limit=1'
         response = requests.get(backend_url, timeout=5)
         
         if response.status_code == 200:
@@ -1058,10 +1379,60 @@ def check_for_new_qr_scans():
                     
                     logger.info(f"NEW QR SCAN DETECTED: {qr_data} (Valid: {is_valid})")
                     
-                    # If valid scan and we have sensor data loaded, clear it and send SMS
+                    # If valid scan and we have sensor data loaded, use it for processing and send SMS
                     if is_valid and sensor_data_loaded:
-                        logger.info("Valid QR scan detected - clearing sensor data...")
-                        clear_mqtt_sensor_data()
+                        logger.info("Valid QR scan detected - processing with existing sensor data...")
+                        
+                        # Start Motor B and schedule auto-stop after 5 seconds
+                        def start_motor_b_with_auto_stop():
+                            try:
+                                logger.info("🚀 QR VALIDATED: Starting Motor B...")
+                                
+                                # Send motor startB request via MQTT
+                                motor_b_start_success = mqtt_listener.publish_message('esp32/motor/request', 'startB')
+                                if motor_b_start_success:
+                                    logger.info("SUCCESS: Motor B START request sent (esp32/motor/request > startB)")
+                                    
+                                    # Emit WebSocket notification for Motor B start
+                                    socketio.emit('workflow_progress', {
+                                        'step': 'motor_b_start',
+                                        'status': 'motor_b_start_requested',
+                                        'message': 'Motor B started after QR validation',
+                                        'timestamp': datetime.now().isoformat(),
+                                        'triggered_by': 'qr_validated'
+                                    })
+                                    
+                                    # Add 5 second delay then stop Motor B
+                                    logger.info("⏳ MOTOR B DELAY: Waiting 5 seconds before stopping Motor B...")
+                                    time.sleep(5)
+                                    
+                                    # Send motor stopB request after delay
+                                    logger.info("🛑 AUTO STOP: Sending stopB command to Motor B after 5s delay...")
+                                    motor_b_stop_success = mqtt_listener.publish_message('esp32/motor/request', 'stopB')
+                                    if motor_b_stop_success:
+                                        logger.info("SUCCESS: Motor B AUTO-STOP request sent (esp32/motor/request > stopB)")
+                                        
+                                        # Emit WebSocket notification for Motor B auto-stop
+                                        socketio.emit('workflow_progress', {
+                                            'step': 'motor_b_auto_stop',
+                                            'status': 'motor_b_auto_stop_requested',
+                                            'message': 'Motor B auto-stop requested after 5s delay',
+                                            'timestamp': datetime.now().isoformat(),
+                                            'triggered_by': 'motor_b_5s_delay'
+                                        })
+                                        
+                                        logger.info("✅ WORKFLOW: Motor B started → 5s delay → Motor B stopped")
+                                    else:
+                                        logger.error("FAILED: Could not send Motor B auto-stop request")
+                                else:
+                                    logger.error("FAILED: Could not send Motor B start request")
+                                    
+                            except Exception as e:
+                                logger.error(f"Error in Motor B start/stop sequence: {e}")
+                        
+                        # Execute Motor B sequence in background thread to not block other processing
+                        motor_b_thread = threading.Thread(target=start_motor_b_with_auto_stop, daemon=True)
+                        motor_b_thread.start()
                         
                         # Get contact number and send SMS notification
                         try:
@@ -1081,6 +1452,108 @@ def check_for_new_qr_scans():
                         except Exception as e:
                             logger.error(f"Error sending SMS notification for QR {qr_data}: {e}")
                         
+                        # Print receipt for valid QR code
+                        try:
+                            logger.info(f"🖨️ PRINTING RECEIPT: Generating receipt for Order {qr_data}...")
+                            
+                            # Get order details for receipt
+                            order_details = latest_scan.get('order', {})
+                            order_number = latest_scan.get('order_number', qr_data)
+                            
+                            # Call the print_receipt function to generate and print receipt
+                            receipt_response = requests.post(
+                                f'{os.getenv("BACKEND_URL", "http://10.194.125.225:5000")}/api/print-receipt',
+                                json={
+                                    'qr_data': qr_data,
+                                    'order_number': order_number,
+                                    'order_details': order_details,
+                                    'source': 'qr_validation_cycle'
+                                },
+                                timeout=10
+                            )
+                            
+                            if receipt_response.status_code == 200:
+                                logger.info(f"✅ RECEIPT PRINTED: Receipt generated and printed for Order {order_number}")
+                            else:
+                                logger.error(f"❌ RECEIPT FAILED: Could not print receipt for Order {order_number}: HTTP {receipt_response.status_code}")
+                                
+                        except Exception as e:
+                            logger.error(f"Error printing receipt for QR {qr_data}: {e}")
+                        
+                        # Link sensor data to this order in package_information table AND update loaded_sensor_data
+                        try:
+                            # Get the order details from the latest scan
+                            order_id = latest_scan.get('order_id')
+                            order_number = latest_scan.get('order_number', qr_data)
+                            
+                            if order_id:
+                                logger.info(f"🔗 LINKING ORDER: Connecting Order ID {order_id} ({order_number}) to latest sensor data...")
+                                
+                                # Get current sensor data from the loaded_sensor_data table
+                                backend_url = f'{os.getenv("BACKEND_URL", "http://10.194.125.225:5000")}/api/sensor-data'
+                                sensor_response = requests.get(backend_url, timeout=5)
+                                
+                                if sensor_response.status_code == 200:
+                                    sensor_data = sensor_response.json()
+                                    
+                                    # Update the loaded_sensor_data table with the order_id
+                                    update_sensor_with_order_data = {
+                                        'order_id': order_id,
+                                        'order_number': order_number,
+                                        'qr_data': qr_data,
+                                        'weight': sensor_data.get('weight'),
+                                        'width': sensor_data.get('width'),
+                                        'height': sensor_data.get('height'),
+                                        'length': sensor_data.get('length'),
+                                        'package_size': sensor_data.get('package_size'),
+                                        'timestamp': datetime.now().isoformat()
+                                    }
+                                    
+                                    # Update loaded_sensor_data with order information
+                                    sensor_update_url = f'{os.getenv("BACKEND_URL", "http://10.194.125.225:5000")}/api/sensor-data'
+                                    sensor_update_response = requests.put(sensor_update_url, json=update_sensor_with_order_data, timeout=5)
+                                    
+                                    if sensor_update_response.status_code in [200, 201]:
+                                        logger.info(f"✅ LOADED_SENSOR_DATA UPDATED: Order {order_number} (ID: {order_id}) linked to sensor data")
+                                    else:
+                                        logger.warning(f"⚠️ Failed to update loaded_sensor_data with order info: HTTP {sensor_update_response.status_code}")
+                                    
+                                    # Create package information record linking sensor data to order
+                                    package_info_data = {
+                                        'order_id': order_id,
+                                        'order_number': order_number,
+                                        'qr_data': qr_data,
+                                        'weight': sensor_data.get('weight'),
+                                        'width': sensor_data.get('width'),
+                                        'height': sensor_data.get('height'),
+                                        'length': sensor_data.get('length'),
+                                        'package_size': sensor_data.get('package_size'),
+                                        'timestamp': datetime.now().isoformat()
+                                    }
+                                    
+                                    # Send to package information endpoint
+                                    package_url = f'{os.getenv("BACKEND_URL", "http://10.194.125.225:5000")}/api/package-information'
+                                    package_response = requests.post(package_url, json=package_info_data, timeout=5)
+                                    
+                                    if package_response.status_code in [200, 201]:
+                                        logger.info(f"✅ PACKAGE INFO CREATED: Order {order_number} package information record created")
+                                        weight = sensor_data.get('weight', 'N/A')
+                                        width = sensor_data.get('width', 'N/A')
+                                        height = sensor_data.get('height', 'N/A') 
+                                        length = sensor_data.get('length', 'N/A')
+                                        package_size = sensor_data.get('package_size', 'N/A')
+                                        logger.info(f"📦 ORDER COMPLETE: {order_number} - Weight: {weight}kg, Dimensions: {width}x{height}x{length}in, Size: {package_size}")
+                                        logger.info(f"🎯 QR VALIDATION SUCCESS: Order {order_number} fully processed with sensor data!")
+                                    else:
+                                        logger.error(f"❌ Failed to create package information record for order {order_number}: HTTP {package_response.status_code}")
+                                else:
+                                    logger.warning(f"⚠️ No sensor data available to link to order {order_number}")
+                            else:
+                                logger.warning(f"⚠️ No order_id found in QR scan data for {qr_data}")
+                                    
+                        except Exception as e:
+                            logger.error(f"Error linking sensor data to order {qr_data}: {e}")
+                        
                         # Emit WebSocket notification
                         socketio.emit('qr_scan_processed', {
                             'qr_data': qr_data,
@@ -1088,7 +1561,88 @@ def check_for_new_qr_scans():
                             'sensor_data_cleared': True
                         })
                         
-                        logger.info("Workflow completed! Ready for next package.")
+                        # Add 10-second delay before restarting the cycle
+                        def restart_cycle_after_delay():
+                            try:
+                                logger.info("🕐 CYCLE RESTART: Starting 10-second delay before restarting cycle...")
+                                
+                                # Emit WebSocket notification about the delay
+                                socketio.emit('workflow_progress', {
+                                    'step': 'cycle_delay',
+                                    'status': 'waiting',
+                                    'message': '10-second delay before cycle restart',
+                                    'timestamp': datetime.now().isoformat(),
+                                    'triggered_by': 'qr_processing_complete'
+                                })
+                                
+                                # Wait 10 seconds
+                                time.sleep(10)
+                                
+                                logger.info("🛑 CYCLE RESTART: 10-second delay complete - Stopping all systems...")
+                                
+                                # Stop all MQTT systems
+                                stop_commands = [
+                                    ('esp32/motor/request', 'stopA', 'Motor A'),
+                                    ('esp32/motor/request', 'stopB', 'Motor B'), 
+                                    ('esp32/grabber1/request', 'stop', 'Grabber 1'),
+                                    ('esp32/grabber2/request', 'stop', 'Grabber 2'),
+                                    ('esp32/actuator/request', 'stop', 'Actuator'),
+                                    ('esp32/loadcell/request', 'stop', 'Load Cell'),
+                                    ('esp32/box/request', 'stop', 'Box System'),
+                                    ('esp32/stepper/request', 'stop', 'Stepper Motor'),
+                                    ('esp32/gsm/request', 'stop', 'GSM Module')
+                                ]
+                                
+                                # Send stop commands to all systems
+                                stopped_count = 0
+                                for topic, command, system_name in stop_commands:
+                                    try:
+                                        success = mqtt_listener.publish_message(topic, command)
+                                        if success:
+                                            logger.info(f"🛑 {system_name} stopped (cycle restart)")
+                                            stopped_count += 1
+                                        else:
+                                            logger.error(f"❌ Failed to stop {system_name}")
+                                    except Exception as e:
+                                        logger.error(f"❌ Error stopping {system_name}: {e}")
+                                
+                                logger.info(f"🛑 STOP COMPLETE: {stopped_count}/{len(stop_commands)} systems stopped")
+                                
+                                # Clear all sensor data to reset system state
+                                clear_mqtt_sensor_data()
+                                logger.info("🧹 Sensor data cleared for cycle restart")
+                                
+                                # Wait 3 seconds for systems to fully stop
+                                logger.info("⏳ CYCLE RESTART: Waiting 3 seconds for systems to stop...")
+                                time.sleep(3)
+                                
+                                # Start the loop again with motor startA
+                                logger.info("🔄 CYCLE RESTART: Sending motor startA to begin new cycle...")
+                                restart_success = mqtt_listener.publish_message('esp32/motor/request', 'startA')
+                                
+                                if restart_success:
+                                    logger.info("✅ CYCLE RESTARTED: Motor startA sent - New cycle begun (esp32/motor/request > startA)")
+                                    
+                                    # Emit WebSocket notification about cycle restart
+                                    socketio.emit('workflow_restart', {
+                                        'message': 'Complete cycle restarted after QR processing and 10s delay',
+                                        'stopped_systems': stopped_count,
+                                        'total_systems': len(stop_commands),
+                                        'timestamp': datetime.now().isoformat(),
+                                        'triggered_by': 'qr_complete_10s_delay'
+                                    })
+                                    
+                                    logger.info("🔄 WORKFLOW COMPLETE: QR processed → 10s delay → All systems stopped → New cycle started")
+                                else:
+                                    logger.error("❌ FAILED to restart cycle - Could not send motor startA command")
+                                    
+                            except Exception as e:
+                                logger.error(f"Error in cycle restart sequence: {e}")
+                        
+                        # Start the cycle restart sequence in background thread
+                        threading.Thread(target=restart_cycle_after_delay, daemon=True).start()
+                        
+                        logger.info("Workflow completed! 10-second delay initiated before cycle restart.")
                     elif not is_valid:
                         logger.info("Invalid QR scan - sensor data remains loaded")
                     elif not sensor_data_loaded:
@@ -1111,9 +1665,12 @@ def clear_mqtt_sensor_data():
         mqtt_sensor_data['box_dimensions']['height'] = None
         mqtt_sensor_data['box_dimensions']['length'] = None
         mqtt_sensor_data['box_dimensions']['timestamp'] = None
+        mqtt_sensor_data['stepper']['status'] = None
+        mqtt_sensor_data['stepper']['current_size'] = None
+        mqtt_sensor_data['stepper']['timestamp'] = None
         
         # Clear sensor data from main backend database
-        backend_url = 'http://10.195.139.225:5000/api/sensor-data'
+        backend_url = f'{os.getenv("BACKEND_URL", "http://10.194.125.225:5000")}/api/sensor-data'
         response = requests.delete(backend_url, timeout=5)
         
         if response.status_code == 200:
@@ -1133,7 +1690,7 @@ def start_qr_monitoring():
     
     # Initialize last_scan_id to current latest scan to avoid processing old scans
     try:
-        backend_url = 'http://10.195.139.225:5000/api/qr-scans?limit=1'
+        backend_url = f'{os.getenv("BACKEND_URL", "http://10.194.125.225:5000")}/api/qr-scans?limit=1'
         response = requests.get(backend_url, timeout=5)
         if response.status_code == 200:
             scans = response.json()
@@ -1159,25 +1716,32 @@ def start_qr_monitoring():
     logger.info("✅ QR scan monitoring started in background")
 
 def determine_package_size(width, height, length):
-    """Determine package size category based on dimensions"""
+    """Determine package size category based on dimensions (keeps raw values)"""
     try:
-        # Calculate volume in cubic centimeters
-        volume = width * height * length
+        # Keep raw values as provided by sensors
+        logger.info(f"� PACKAGE CALCULATION: Raw dimensions W:{width:.2f}cm, H:{height:.2f}cm, L:{length:.2f}cm")
         
-        # Calculate max dimension
+        # Calculate volume and max dimension with raw values
+        volume = width * height * length
         max_dimension = max(width, height, length)
         
-        # Size classification logic (you can adjust these thresholds)
-        if volume <= 1000 or max_dimension <= 15:  # 1000 cm³ or max 15cm
-            return "Small"
-        elif volume <= 8000 or max_dimension <= 30:  # 8000 cm³ or max 30cm
-            return "Medium"
+        logger.info(f"📐 PACKAGE CALCULATION: Volume={volume:.2f}in³, Max dimension={max_dimension:.2f}in")
+        
+        # Size classification logic based on raw inch values
+        # Adjusted thresholds for inch measurements
+        if abs(volume) <= 61 or abs(max_dimension) <= 6:  # ~61 in³ ≈ 1000 cm³, 6in ≈ 15cm
+            size = "Small"
+        elif abs(volume) <= 488 or abs(max_dimension) <= 12:  # ~488 in³ ≈ 8000 cm³, 12in ≈ 30cm
+            size = "Medium"
         else:
-            return "Large"
+            size = "Large"
+        
+        logger.info(f"📦 FINAL PACKAGE SIZE: {size} (Raw Volume: {volume:.2f}in³, Raw Max: {max_dimension:.2f}in)")
+        return size
             
     except Exception as e:
         logger.error(f"Error determining package size: {e}")
-        return "Unknown"
+        return "Small"  # Default to Small if calculation fails
 
 def store_weight_data_in_db():
     """Store ONLY weight data in database (Step 3: Load Sensor captures weight)"""
@@ -1185,7 +1749,7 @@ def store_weight_data_in_db():
     
     try:
         # Send only weight data to main backend
-        backend_url = 'http://10.195.139.225:5000/api/sensor-data'
+        backend_url = f'{os.getenv("BACKEND_URL", "http://10.194.125.225:5000")}/api/sensor-data'
         sensor_data = {
             'weight': mqtt_sensor_data['loadcell']['weight'],
             'width': None,  # Dimensions not captured yet
@@ -1237,7 +1801,7 @@ def update_sensor_data_with_dimensions():
     
     try:
         # Send complete sensor data to main backend (this will overwrite the weight-only entry)
-        backend_url = 'http://10.195.139.225:5000/api/sensor-data'
+        backend_url = f'{os.getenv("BACKEND_URL", "http://10.194.125.225:5000")}/api/sensor-data'
         
         # Determine package size
         width = mqtt_sensor_data['box_dimensions']['width']
@@ -1388,7 +1952,7 @@ def apply_package_data():
             return jsonify({'error': 'No order number provided'}), 400
         
         # Validate order exists by calling main backend
-        backend_url = 'http://10.195.139.225:5000/api/validate-qr'
+        backend_url = 'http://10.194.125.225:5000/api/validate-qr'
         validation_response = requests.post(backend_url, json={'qr_data': order_number}, timeout=10)
         
         if validation_response.status_code != 200:
@@ -1426,7 +1990,7 @@ def apply_package_data():
         }
         
         # Send package data to main backend
-        backend_package_url = 'http://10.195.139.225:5000/api/package-information'
+        backend_package_url = 'http://10.194.125.225:5000/api/package-information'
         package_response = requests.post(backend_package_url, json=package_data, timeout=10)
         
         if package_response.status_code == 200 or package_response.status_code == 201:
@@ -1598,49 +2162,86 @@ def start_motor():
 
 @app.route('/api/stop-motor', methods=['POST'])
 def stop_motor():
-    """Stop motor by sending MQTT command to ESP32"""
+    """Stop all systems by sending MQTT stop commands to all ESP32 modules"""
     try:
-        logger.info("🛑 Stop motor request received")
+        logger.info("🛑 Emergency stop request received - Stopping all systems")
         
         # Check if MQTT is connected
         if not mqtt_listener.is_connected:
-            logger.warning("❌ MQTT not connected - cannot stop motor")
+            logger.warning("❌ MQTT not connected - cannot stop systems")
             return jsonify({
                 'error': 'MQTT not connected',
-                'message': 'Cannot stop motor - MQTT broker not connected'
+                'message': 'Cannot stop systems - MQTT broker not connected'
             }), 503
         
-        logger.info("✅ MQTT is connected, sending stopA command...")
+        logger.info("✅ MQTT is connected, sending stop commands to all systems...")
         
-        # Publish stopA command to ESP32
-        success = mqtt_listener.publish_message('esp32/motor/request', 'stopA')
+        # List of all systems to stop with their stop commands
+        stop_commands = [
+            ('esp32/motor/request', 'stopA', 'Motor A'),
+            ('esp32/motor/request', 'stopB', 'Motor B'), 
+            ('esp32/grabber1/request', 'stop', 'Grabber 1'),
+            ('esp32/grabber2/request', 'stop', 'Grabber 2'),
+            ('esp32/actuator/request', 'stop', 'Actuator'),
+            ('esp32/loadcell/request', 'stop', 'Load Cell'),
+            ('esp32/box/request', 'stop', 'Box System'),
+            ('esp32/stepper/request', 'stop', 'Stepper Motor'),
+            ('esp32/gsm/request', 'stop', 'GSM Module')
+        ]
         
-        if success:
-            logger.info("🛑 Motor A stopped via MQTT command (stopA)")
-            # Emit WebSocket notification
-            socketio.emit('system_command', {
-                'command': 'stop_motor',
-                'status': 'success',
-                'message': 'Motor A stopped',
-                'timestamp': datetime.now().isoformat()
-            })
-            
-            return jsonify({
-                'success': True,
-                'message': 'Motor stopped successfully',
-                'timestamp': datetime.now().isoformat()
-            })
-        else:
-            logger.error("❌ Failed to publish stop command to MQTT")
-            return jsonify({
-                'error': 'Failed to send MQTT command',
-                'message': 'Could not publish stop command to ESP32'
-            }), 500
+        # Send stop commands to all systems
+        results = []
+        for topic, command, system_name in stop_commands:
+            try:
+                success = mqtt_listener.publish_message(topic, command)
+                if success:
+                    logger.info(f"🛑 {system_name} stopped via MQTT ({topic} > {command})")
+                    results.append({'system': system_name, 'status': 'stopped', 'command': f"{topic} > {command}"})
+                else:
+                    logger.error(f"❌ Failed to stop {system_name} ({topic} > {command})")
+                    results.append({'system': system_name, 'status': 'failed', 'command': f"{topic} > {command}"})
+            except Exception as e:
+                logger.error(f"❌ Error stopping {system_name}: {e}")
+                results.append({'system': system_name, 'status': 'error', 'error': str(e)})
+        
+        # Clear all sensor data to reset the system state
+        try:
+            clear_mqtt_sensor_data()
+            logger.info("🧹 Sensor data cleared after emergency stop")
+        except Exception as e:
+            logger.error(f"⚠️ Failed to clear sensor data: {e}")
+        
+        # Emit WebSocket notification about emergency stop
+        socketio.emit('emergency_stop', {
+            'message': 'All systems stopped',
+            'results': results,
+            'timestamp': datetime.now().isoformat()
+        })
+        
+        # Also emit the legacy system_command for backward compatibility
+        socketio.emit('system_command', {
+            'command': 'emergency_stop',
+            'status': 'success',
+            'message': 'All systems stopped via emergency stop',
+            'timestamp': datetime.now().isoformat()
+        })
+        
+        successful_stops = len([r for r in results if r['status'] == 'stopped'])
+        total_systems = len(results)
+        
+        logger.info(f"🛑 Emergency stop completed: {successful_stops}/{total_systems} systems stopped successfully")
+        
+        return jsonify({
+            'success': True,
+            'message': f'Emergency stop completed: {successful_stops}/{total_systems} systems stopped',
+            'results': results,
+            'timestamp': datetime.now().isoformat()
+        })
             
     except Exception as e:
-        logger.error(f"Error stopping motor: {str(e)}")
+        logger.error(f"Error during emergency stop: {str(e)}")
         return jsonify({
-            'error': 'Failed to stop motor',
+            'error': 'Failed to execute emergency stop',
             'details': str(e)
         }), 500
 
@@ -2188,7 +2789,7 @@ def validate_qr():
             return jsonify({'valid': False, 'message': 'No QR data provided'}), 400
         
         # Forward the validation request to the main backend server
-        backend_url = 'http://10.195.139.225:5000/api/validate-qr'
+        backend_url = 'http://10.194.125.225:5000/api/validate-qr'
         response = requests.post(backend_url, json={'qr_data': qr_data}, timeout=10)
         
         if response.status_code == 200:
@@ -2245,6 +2846,67 @@ def on_qr_detected(qr_data, validation_result):
                     
             except Exception as print_error:
                 logger.error(f"Error printing receipt for QR {qr_data}: {print_error}")
+            
+            # Send motor startB command immediately when QR is validated
+            try:
+                logger.info(f"QR VALIDATED - MOTOR CONTROL: Sending motor startB command for validated QR {qr_data}")
+                
+                # Send motor startB command to begin the workflow
+                motor_success = mqtt_listener.publish_message('esp32/motor/request', 'startB')
+                if motor_success:
+                    logger.info(f"SUCCESS: Motor startB command sent (esp32/motor/request > startB)")
+                    
+                    # Emit WebSocket notification
+                    socketio.emit('motor_command', {
+                        'command': 'startB',
+                        'trigger': 'qr_validation',
+                        'qr_data': qr_data,
+                        'timestamp': datetime.now().isoformat()
+                    })
+                    
+                else:
+                    logger.error(f"FAILED: Could not send motor startB command for QR {qr_data}")
+                    
+            except Exception as motor_error:
+                logger.error(f"Error sending motor startB command for QR {qr_data}: {motor_error}")
+            
+            # Determine stepper size based on box dimensions and send stepper command
+            try:
+                dimensions = mqtt_sensor_data['box_dimensions']
+                if all(d is not None for d in [dimensions['width'], dimensions['height'], dimensions['length']]):
+                    # Determine package size for stepper
+                    width, height, length = dimensions['width'], dimensions['height'], dimensions['length']
+                    package_size = determine_package_size(width, height, length)
+                    
+                    # Convert package size to stepper command (lowercase)
+                    stepper_size = package_size.lower()  # "small", "medium", or "large"
+                    
+                    # Store current size for later back command
+                    mqtt_sensor_data['stepper']['current_size'] = package_size
+                    
+                    logger.info(f"QR VALIDATED - STEPPER CONTROL: Determined size '{stepper_size}' from dimensions W:{width}, H:{height}, L:{length}")
+                    
+                    # Send stepper size command
+                    stepper_success = mqtt_listener.publish_message('esp32/stepper/request', stepper_size)
+                    if stepper_success:
+                        logger.info(f"SUCCESS: Stepper size command sent (esp32/stepper/request > {stepper_size})")
+                        
+                        # Emit WebSocket notification
+                        socketio.emit('stepper_command', {
+                            'command': stepper_size,
+                            'size': package_size,
+                            'dimensions': {'width': width, 'height': height, 'length': length},
+                            'qr_data': qr_data,
+                            'timestamp': datetime.now().isoformat()
+                        })
+                        
+                    else:
+                        logger.error(f"FAILED: Could not send stepper size command {stepper_size}")
+                else:
+                    logger.warning(f"QR VALIDATED - STEPPER CONTROL: Cannot determine size, missing dimensions W:{dimensions['width']}, H:{dimensions['height']}, L:{dimensions['length']}")
+                    
+            except Exception as stepper_error:
+                logger.error(f"Error in stepper control for QR {qr_data}: {stepper_error}")
         
         # Get the latest history to include image data
         history = camera.get_qr_history()
@@ -2270,7 +2932,7 @@ def on_qr_detected(qr_data, validation_result):
                     }
                     
                     # Send package data to main backend
-                    backend_package_url = 'http://10.195.139.225:5000/api/package-information'
+                    backend_package_url = 'http://10.194.125.225:5000/api/package-information'
                     package_response = requests.post(backend_package_url, json=package_data, timeout=10)
                     
                     if package_response.status_code in [200, 201]:
@@ -2688,7 +3350,7 @@ def simulate_qr_scan():
         qr_code = data.get('qr_code', 'ORD-001')
         
         # Validate the QR code using the same method as camera
-        backend_url = 'http://10.195.139.225:5000/api/validate-qr'
+        backend_url = 'http://10.194.125.225:5000/api/validate-qr'
         validation_response = requests.post(backend_url, json={'qr_data': qr_code}, timeout=10)
         
         if validation_response.status_code == 200:
@@ -2773,7 +3435,7 @@ def test_qr_image():
         img_base64 = base64.b64encode(buffer).decode('utf-8')
         
         # Validate the QR code
-        backend_url = 'http://10.195.139.225:5000/api/validate-qr'
+        backend_url = 'http://10.194.125.225:5000/api/validate-qr'
         try:
             validation_response = requests.post(backend_url, json={'qr_data': qr_code}, timeout=10)
             if validation_response.status_code == 200:
@@ -2869,6 +3531,6 @@ if __name__ == '__main__':
     
     # Simple SocketIO startup to avoid Werkzeug conflicts
     socketio.run(app, 
-                host='0.0.0.0', 
-                port=5001, 
+                host=os.getenv('RASPI_HOST', '0.0.0.0'), 
+                port=int(os.getenv('RASPI_PORT', '5001')), 
                 debug=False)

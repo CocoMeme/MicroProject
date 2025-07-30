@@ -8,9 +8,13 @@ import requests
 import json
 import base64
 import os
+from dotenv import load_dotenv
 
-	# Backend server URL (your website)
-BACKEND_SERVER = 'http://10.195.139.225:5000'  # Your Flask backend
+# Load environment variables
+load_dotenv()
+
+# Backend server URL (your website)
+BACKEND_SERVER = os.getenv('BACKEND_URL', 'http://10.194.125.225:5000')  # Your Flask backend
 
 	# Try to import Raspberry Pi specific modules, fall back to mock if not available
 try:
@@ -46,6 +50,204 @@ except ImportError:
 	# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Log that ZBar warning suppression is active
+logger.info("ZBar warning suppression activated - decoder warnings will be filtered")
+
+# Suppress ZBar decoder warnings
+class ZBarWarningFilter(logging.Filter):
+    def filter(self, record):
+        # Filter out ZBar databar decoder warnings
+        if hasattr(record, 'getMessage'):
+            message = record.getMessage()
+            if '_zbar_decode_databar: Assertion' in message or 'decoder/databar.c' in message:
+                return False
+        return True
+
+# Apply the filter to suppress ZBar warnings from stderr
+import sys
+import warnings
+
+# Suppress ZBar warnings at the C library level
+warnings.filterwarnings("ignore", message=".*zbar.*")
+warnings.filterwarnings("ignore", message=".*databar.*")
+
+# Set environment variable to suppress ZBar debug output
+import os
+os.environ['ZBAR_DEBUG'] = '0'
+
+# Additional environment variables that might help suppress ZBar warnings
+os.environ['ZBAR_QUIET'] = '1'
+os.environ['ZBAR_SILENCE'] = '1'
+
+# Try to suppress at system level
+try:
+    # On Unix-like systems, try to redirect stderr to /dev/null during imports
+    import signal
+    
+    def signal_handler(sig, frame):
+        pass
+    
+    # Install signal handlers to prevent crashes from C library issues
+    signal.signal(signal.SIGABRT, signal_handler)
+except (ImportError, AttributeError):
+    pass
+
+# Additional ZBar warning suppression
+try:
+    # Try to suppress ZBar warnings at the library level if available
+    import zbar
+    # Disable ZBar's internal debug/warning output
+    if hasattr(zbar, 'set_verbosity'):
+        zbar.set_verbosity(0)
+except (ImportError, AttributeError):
+    # ZBar module not available or doesn't have verbosity control
+    pass
+
+# Try to suppress warnings at C library level using ctypes
+try:
+    import ctypes
+    import ctypes.util
+    
+    # Try to find and configure libzbar
+    libzbar_path = ctypes.util.find_library('zbar')
+    if libzbar_path:
+        libzbar = ctypes.CDLL(libzbar_path)
+        # Try to disable debug output if the function exists
+        if hasattr(libzbar, 'zbar_set_verbosity'):
+            libzbar.zbar_set_verbosity(0)
+        if hasattr(libzbar, 'zbar_symbol_set_verbosity'):
+            libzbar.zbar_symbol_set_verbosity(0)
+except (ImportError, OSError, AttributeError):
+    # ctypes or libzbar not available
+    pass
+
+# Alternative approach: Try to redirect stderr at file descriptor level
+try:
+    import atexit
+    
+    # Create a null device for discarding ZBar warnings
+    NULL_DEVICE = os.devnull
+    
+    def suppress_zbar_fd_warnings():
+        """Temporarily redirect stderr to null device during ZBar operations"""
+        original_stderr_fd = os.dup(2)
+        null_fd = os.open(NULL_DEVICE, os.O_WRONLY)
+        os.dup2(null_fd, 2)
+        os.close(null_fd)
+        return original_stderr_fd
+    
+    def restore_stderr_fd(original_fd):
+        """Restore original stderr file descriptor"""
+        os.dup2(original_fd, 2)
+        os.close(original_fd)
+        
+except (ImportError, OSError, AttributeError):
+    # OS operations not available or supported
+    def suppress_zbar_fd_warnings():
+        return None
+    def restore_stderr_fd(fd):
+        pass
+
+# Also suppress stderr output from ZBar C library
+class StderrFilter:
+    def __init__(self):
+        self.original_stderr = sys.stderr
+        self.buffer = ""
+        
+    def write(self, s):
+        # Add to buffer for line-based filtering
+        self.buffer += s
+        
+        # Process complete lines
+        while '\n' in self.buffer:
+            line, self.buffer = self.buffer.split('\n', 1)
+            
+            # Filter out ZBar decoder warnings with comprehensive patterns
+            zbar_patterns = [
+                '_zbar_decode_databar: Assertion',
+                'decoder/databar.c',
+                'WARNING: decoder/databar.c',
+                'failed.\n        i=',
+                'f=-1(010) part=0'
+            ]
+            
+            # Check if line contains any ZBar warning pattern
+            should_filter = any(pattern in line for pattern in zbar_patterns)
+            
+            if not should_filter:
+                self.original_stderr.write(line + '\n')
+    
+    def flush(self):
+        # Write any remaining buffer content (if not a ZBar warning)
+        if self.buffer:
+            zbar_patterns = [
+                '_zbar_decode_databar: Assertion',
+                'decoder/databar.c',
+                'WARNING: decoder/databar.c',
+                'failed.\n        i=',
+                'f=-1(010) part=0'
+            ]
+            
+            should_filter = any(pattern in self.buffer for pattern in zbar_patterns)
+            if not should_filter:
+                self.original_stderr.write(self.buffer)
+            self.buffer = ""
+            
+        self.original_stderr.flush()
+
+# Apply stderr filter
+sys.stderr = StderrFilter()
+
+# Additional OS-level stderr suppression for ZBar C library warnings
+import os
+import subprocess
+import tempfile
+
+# Create a more aggressive stderr filter that works at OS level
+class OSLevelStderrFilter:
+    def __init__(self):
+        self.original_stderr = sys.stderr
+        self.temp_file = None
+        
+    def __enter__(self):
+        # Redirect stderr to a temporary file during ZBar operations
+        self.temp_file = tempfile.NamedTemporaryFile(mode='w+', delete=False)
+        self.original_stderr_fd = os.dup(2)  # Duplicate stderr file descriptor
+        os.dup2(self.temp_file.fileno(), 2)  # Redirect stderr to temp file
+        return self
+        
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        # Restore original stderr
+        os.dup2(self.original_stderr_fd, 2)
+        os.close(self.original_stderr_fd)
+        
+        # Read the temp file and filter out ZBar warnings
+        if self.temp_file:
+            self.temp_file.seek(0)
+            content = self.temp_file.read()
+            self.temp_file.close()
+            
+            # Filter and write non-ZBar content to original stderr
+            if content:
+                lines = content.split('\n')
+                for line in lines:
+                    zbar_patterns = [
+                        '_zbar_decode_databar: Assertion',
+                        'decoder/databar.c',
+                        'WARNING: decoder/databar.c',
+                        'failed.',
+                        'f=-1(010) part=0'
+                    ]
+                    
+                    if not any(pattern in line for pattern in zbar_patterns) and line.strip():
+                        self.original_stderr.write(line + '\n')
+            
+            # Clean up temp file
+            try:
+                os.unlink(self.temp_file.name)
+            except:
+                pass
 
 class CameraManager:
 		def __init__(self):
@@ -505,7 +707,31 @@ class CameraManager:
 					self.current_qr_data = None
 					self.current_qr_rect = None
 
-				decoded_objects = decode(frame)
+				# Decode QR codes with comprehensive warning suppression
+				original_stderr_fd = None
+				try:
+					# Try OS-level stderr suppression first
+					with OSLevelStderrFilter():
+						# Also try file descriptor level suppression
+						original_stderr_fd = suppress_zbar_fd_warnings()
+						decoded_objects = decode(frame)
+						if original_stderr_fd is not None:
+							restore_stderr_fd(original_stderr_fd)
+							original_stderr_fd = None
+				except Exception as decode_error:
+					# Ensure stderr is restored if there was an error
+					if original_stderr_fd is not None:
+						try:
+							restore_stderr_fd(original_stderr_fd)
+						except:
+							pass
+					
+					# Fallback to regular decode
+					try:
+						decoded_objects = decode(frame)
+					except Exception as fallback_error:
+						logger.debug(f"QR decode failed: {fallback_error}")
+						decoded_objects = []
 				for obj in decoded_objects:
 					data = obj.data.decode('utf-8')
 					current_time = time.time()
@@ -546,7 +772,7 @@ class CameraManager:
 							# Notify callbacks about new QR detection
 							self._notify_qr_callbacks(data, validation_result)
 							
-							logger.info(f"Already scanned QR code detected: {data}")
+							logger.info(f"Already scanned QR code detected: {data} - Cycle will NOT proceed")
 						
 						# Draw orange box for already scanned QR codes
 						points = obj.polygon
@@ -589,7 +815,7 @@ class CameraManager:
 							# Notify callbacks about new QR detection
 							self._notify_qr_callbacks(data, validation_result)
 							
-							logger.warning(f"Invalid QR code detected: {data} - {validation_result.get('message', 'Not found in orders database')}")
+							logger.warning(f"Invalid QR code detected: {data} - {validation_result.get('message', 'Not found in orders database')} - Cycle will NOT proceed")
 						
 						# Draw red box for invalid QR codes
 						points = obj.polygon
@@ -632,10 +858,10 @@ class CameraManager:
 						# Add to history with image data
 						self.add_to_qr_history(data, validation_result, image_data)
 						
-						# Notify callbacks about new QR detection
+						# Notify callbacks about new QR detection (for cycle integration)
 						self._notify_qr_callbacks(data, validation_result)
 						
-						logger.info(f"Valid QR code detected: {data} - Order: {validation_result.get('order_number', 'N/A')}")
+						logger.info(f"Valid QR code detected: {data} - Order: {validation_result.get('order_number', 'N/A')} - Cycle will proceed with Motor B, GSM, and receipt printing")
 
 					# Draw a bounding box around the QR code
 					points = obj.polygon

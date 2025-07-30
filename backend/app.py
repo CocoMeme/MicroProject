@@ -34,6 +34,9 @@ CORS(app)  # Enable CORS for all routes
 # Initialize SocketIO with CORS enabled
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
+# Track application startup time for uptime calculation
+app_startup_time = datetime.now()
+
 # Database setup
 def init_db():
     conn = sqlite3.connect('database.db')
@@ -263,7 +266,7 @@ def dict_factory(cursor, row):
     return d
 
 # Configuration for Raspberry Pi
-RASPBERRY_PI_URL = os.getenv('RASPBERRY_PI_URL', 'http://10.195.139.227:5001')  # Default value if not set
+RASPBERRY_PI_URL = os.getenv('RASPBERRY_PI_URL', 'http://10.194.125.227:5001')  # Default value if not set
 
 def send_print_request_to_raspi(order_data):
     """Send print request to Raspberry Pi with order details"""
@@ -314,6 +317,99 @@ def send_print_request_to_raspi(order_data):
         error_msg = f"Print request failed: {str(e)}"
         logger.error(error_msg)
         return False, error_msg
+
+def get_system_uptime():
+    """Calculate and return system uptime as formatted string"""
+    uptime_delta = datetime.now() - app_startup_time
+    days = uptime_delta.days
+    hours, remainder = divmod(uptime_delta.seconds, 3600)
+    minutes, _ = divmod(remainder, 60)
+    
+    if days > 0:
+        return f"{days} days, {hours} hours"
+    elif hours > 0:
+        return f"{hours} hours, {minutes} minutes"
+    else:
+        return f"{minutes} minutes"
+
+def get_real_time_dashboard_data():
+    """Get real-time dashboard data from database"""
+    try:
+        conn = sqlite3.connect('database.db')
+        c = conn.cursor()
+        
+        # Get today's date for filtering
+        today = datetime.now().strftime('%Y-%m-%d')
+        
+        # Get QR scans today (from qr_scans table)
+        c.execute('''
+            SELECT COUNT(*) FROM qr_scans 
+            WHERE DATE(timestamp) = ? AND is_valid = 1
+        ''', (today,))
+        scans_today = c.fetchone()[0] or 0
+        
+        # Get prints today (from scanned_codes table - these represent successful prints)
+        c.execute('''
+            SELECT COUNT(*) FROM scanned_codes 
+            WHERE DATE(scanned_at) = ? AND isverified = 'yes'
+        ''', (today,))
+        prints_today = c.fetchone()[0] or 0
+        
+        # Get total packages processed (from package_information table)
+        c.execute('SELECT COUNT(*) FROM package_information')
+        total_packages = c.fetchone()[0] or 0
+        
+        # Get pending parcels (loaded_sensor_data without linked orders)
+        c.execute('''
+            SELECT COUNT(*) FROM loaded_sensor_data lsd
+            LEFT JOIN package_information pi ON lsd.id = pi.id
+            WHERE pi.id IS NULL
+        ''')
+        pending_parcels = c.fetchone()[0] or 0
+        
+        # Calculate uptime
+        uptime_str = get_system_uptime()
+        
+        # Calculate sorting rate (packages per hour based on today's activity)
+        if scans_today > 0:
+            # Rough calculation: scans per hour based on time elapsed today
+            current_time = datetime.now()
+            start_of_day = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
+            hours_elapsed = max(1, (current_time - start_of_day).seconds / 3600)
+            sorting_rate = int(scans_today / hours_elapsed) if hours_elapsed > 0 else scans_today
+        else:
+            sorting_rate = 0
+            
+        conn.close()
+        
+        return {
+            "total_parcels": total_packages,
+            "processed_today": scans_today,
+            "pending_parcels": pending_parcels,
+            "sorting_rate": sorting_rate,
+            "system_status": "operational",
+            "conveyor_speed": 2.5,  # This could be made dynamic if you have sensor data
+            "last_update": datetime.now().isoformat(),
+            "uptime": uptime_str,
+            "scans_today": scans_today,
+            "prints_today": prints_today
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting real-time dashboard data: {e}")
+        # Return fallback data if database query fails
+        return {
+            "total_parcels": 0,
+            "processed_today": 0,
+            "pending_parcels": 0,
+            "sorting_rate": 0,
+            "system_status": "error",
+            "conveyor_speed": 0.0,
+            "last_update": datetime.now().isoformat(),
+            "uptime": "unknown",
+            "scans_today": 0,
+            "prints_today": 0
+        }
 
 # Sample data for demonstration
 parcel_data = {
@@ -370,14 +466,9 @@ def home():
 
 @app.route('/api/dashboard')
 def get_dashboard_data():
-    # Simulate real-time data updates
-    parcel_data["processed_today"] = random.randint(85, 95)
-    parcel_data["pending_parcels"] = random.randint(15, 30)
-    parcel_data["sorting_rate"] = random.randint(140, 150)
-    parcel_data["conveyor_speed"] = round(random.uniform(2.0, 3.0), 1)
-    parcel_data["last_update"] = datetime.now().isoformat()
-
-    return jsonify(parcel_data)
+    # Get real-time data from database
+    real_time_data = get_real_time_dashboard_data()
+    return jsonify(real_time_data)
 
 @app.route('/api/recent-parcels')
 def get_recent_parcels():
@@ -387,13 +478,13 @@ def get_recent_parcels():
 def get_system_status():
     return jsonify({
         "conveyor_belt": "running",
-        "sorting_arms": "operational",
+        "sorting_arms": "operational", 
         "sensors": "active",
         "esp32_connection": "connected",
         "raspberry_pi": "healthy",
         "temperature": random.randint(20, 30),
         "humidity": random.randint(40, 60),
-        "uptime": "2 days, 14 hours"
+        "uptime": get_system_uptime()
     })
 
 @app.route('/api/qr-scans', methods=['POST'])
@@ -878,7 +969,7 @@ def get_full_system_status():
             "raspberry_pi": "healthy" if camera_response.ok and printer_response.ok else "issues detected",
             "temperature": random.randint(20, 30),
             "humidity": random.randint(40, 60),
-            "uptime": "2 days, 14 hours",
+            "uptime": get_system_uptime(),
             "camera_system": camera_status,
             "printer_system": printer_status
         }
@@ -1061,7 +1152,7 @@ def handle_get_system_status(data=None):
             "raspberry_pi": "healthy" if camera_response.ok else "issues detected",
             "temperature": random.randint(20, 30),
             "humidity": random.randint(40, 60),
-            "uptime": "2 days, 14 hours",
+            "uptime": get_system_uptime(),
             "camera_system": camera_status
         }
         
@@ -1901,4 +1992,6 @@ def get_workflow_status():
 
 if __name__ == '__main__':
     logger.info("Starting Flask application with SocketIO...")
-    socketio.run(app, debug=False, host='0.0.0.0', port=5000)
+    socketio.run(app, debug=False, 
+                host=os.getenv('BACKEND_HOST', '0.0.0.0'), 
+                port=int(os.getenv('BACKEND_PORT', '5000')))
