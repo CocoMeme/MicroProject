@@ -170,37 +170,37 @@ class ReceiptPrinter:
         def play_sound():
             try:
                 if pygame.mixer.get_init():
-                    sound_path = "/home/test/Desktop/sound/success_receipt.mp3"
-                    if os.path.exists(sound_path):
-                        sound = pygame.mixer.Sound(sound_path)
-                        sound.play()
-                        logger.info("Success receipt sound played (QR code scanning)")
-                    else:
-                        logger.warning(f"Sound file not found: {sound_path}")
-                else:
-                    logger.warning("Pygame mixer not initialized")
-            except Exception as e:
-                logger.error(f"Failed to play success receipt sound: {e}")
-        
-        # Play sound in background thread to avoid blocking
-        threading.Thread(target=play_sound, daemon=True).start()
-
-    def _play_receipt_sound(self):
-        """Play success sound for printing QR code only in a separate thread to avoid blocking"""
-        def play_sound():
-            try:
-                if pygame.mixer.get_init():
                     sound_path = "/home/test/Desktop/sound/success.mp3"
                     if os.path.exists(sound_path):
                         sound = pygame.mixer.Sound(sound_path)
                         sound.play()
-                        logger.info("Success sound played (QR code printing)")
+                        logger.info("Success sound played (QR code scanning)")
                     else:
                         logger.warning(f"Sound file not found: {sound_path}")
                 else:
                     logger.warning("Pygame mixer not initialized")
             except Exception as e:
                 logger.error(f"Failed to play success sound: {e}")
+        
+        # Play sound in background thread to avoid blocking
+        threading.Thread(target=play_sound, daemon=True).start()
+
+    def _play_receipt_sound(self):
+        """Play success receipt sound for printing receipt details in a separate thread to avoid blocking"""
+        def play_sound():
+            try:
+                if pygame.mixer.get_init():
+                    sound_path = "/home/test/Desktop/sound/success_receipt.mp3"
+                    if os.path.exists(sound_path):
+                        sound = pygame.mixer.Sound(sound_path)
+                        sound.play()
+                        logger.info("Success receipt sound played (Receipt printing)")
+                    else:
+                        logger.warning(f"Sound file not found: {sound_path}")
+                else:
+                    logger.warning("Pygame mixer not initialized")
+            except Exception as e:
+                logger.error(f"Failed to play success receipt sound: {e}")
         
         # Play sound in background thread to avoid blocking
         threading.Thread(target=play_sound, daemon=True).start()
@@ -263,9 +263,9 @@ class ReceiptPrinter:
                         
                         # Play appropriate sound based on print type
                         if is_qr_only:
-                            self._play_success_sound()  # QR code sound
+                            self._play_receipt_sound()  # Play success.mp3 for QR code printing
                         else:
-                            self._play_receipt_sound()  # Receipt details sound
+                            self._play_success_sound()  # Play success_receipt.mp3 for receipt details
                             
                         return True, "Print successful"
 

@@ -77,8 +77,14 @@ void callback(char* topic, byte* payload, unsigned int length) {
 void reconnect() {
   while (!client.connected()) {
     Serial.print("🔁 Connecting to MQTT...");
-    if (client.connect("ESP32_PARCEL")) {
+    
+    // Create unique client ID using MAC address
+    String clientId = "ESP32_GRABBER_" + WiFi.macAddress();
+    clientId.replace(":", ""); // Remove colons from MAC address
+    
+    if (client.connect(clientId.c_str())) {
       Serial.println("connected!");
+      Serial.println("Client ID: " + clientId);
       client.subscribe("esp32/parcel/request");
     } else {
       Serial.print("❌ failed (rc=");

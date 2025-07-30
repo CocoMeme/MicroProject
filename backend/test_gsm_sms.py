@@ -14,12 +14,12 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # MQTT Configuration (should match your Raspberry Pi settings)
-MQTT_BROKER = "10.195.139.227"  # Your Raspberry Pi IP
+MQTT_BROKER = "10.194.125.227"  # Your Raspberry Pi IP
 MQTT_PORT = 1883
 MQTT_CLIENT_ID = "GSM_SMS_Tester"
 
 # Test phone number (replace with your actual phone number)
-TEST_PHONE_NUMBER = "+639612903652"  # Philippine format: +63 + number without leading 0
+TEST_PHONE_NUMBER = "+639126686198"  # Philippine format: +63 + number without leading 0
 TEST_MESSAGE = "Your Parcel is Being Delivered"
 
 class GSMSMSTester:

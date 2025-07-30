@@ -320,8 +320,14 @@ void callback(char* topic, byte* payload, unsigned int length) {
 void reconnect() {
   while (!client.connected()) {
     Serial.print("Connecting to MQTT...");
-    if (client.connect("ESP32_Integrated")) {
+    
+    // Create unique client ID using MAC address
+    String clientId = "ESP32_" + WiFi.macAddress();
+    clientId.replace(":", ""); // Remove colons from MAC address
+    
+    if (client.connect(clientId.c_str())) {
       Serial.println("connected.");
+      Serial.println("Client ID: " + clientId);
       client.subscribe("esp32/motor/request");
       client.subscribe("esp32/loadcell/request");
       client.subscribe("esp32/gsm/send");

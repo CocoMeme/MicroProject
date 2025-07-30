@@ -331,8 +331,14 @@ void setup_wifi() {
 void reconnect() {
   while (!client.connected()) {
     Serial.print("Connecting to MQTT...");
-    if (client.connect("ESP32_COMBINED_CLIENT")) {
+    
+    // Create unique client ID using MAC address
+    String clientId = "ESP32_PART2_" + WiFi.macAddress();
+    clientId.replace(":", ""); // Remove colons from MAC address
+    
+    if (client.connect(clientId.c_str())) {
       Serial.println("connected");
+      Serial.println("Client ID: " + clientId);
       client.subscribe("esp32/grabber1/request");
       client.subscribe("esp32/grabber2/request");
       client.subscribe("esp32/box/request");
