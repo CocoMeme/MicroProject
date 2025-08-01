@@ -117,7 +117,7 @@ The Automated Parcel Processing System is a comprehensive IoT solution that comb
 
 ### Hardware Requirements
 
-#### 🖥️ **Raspberry Pi 4 (Main Controller)**
+#### 🖥️ **Raspberry Pi 5 (Main Controller)**
 - **Model**: Raspberry Pi 4B with 4GB+ RAM (8GB recommended)
 - **Storage**: 32GB+ microSD card (Class 10)
 - **Connectivity**: WiFi/Ethernet, Bluetooth, USB ports
