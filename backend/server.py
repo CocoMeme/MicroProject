@@ -11,10 +11,28 @@ import time
 import requests
 import os
 import re
+import sqlite3
+import pygame
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+
+# Initialize pygame mixer for alarm sounds
+try:
+    pygame.mixer.init()
+    PYGAME_AVAILABLE = True
+    logger = logging.getLogger(__name__)
+    logger.info("✅ Pygame mixer initialized for alarm sounds")
+except Exception as e:
+    PYGAME_AVAILABLE = False
+    logger = logging.getLogger(__name__)
+    logger.warning(f"⚠️ Pygame mixer not available: {e}")
+
+# Database helper function
+def dict_factory(cursor, row):
+    """Convert sqlite row to dictionary"""
+    return {col[0]: row[idx] for idx, col in enumerate(cursor.description)}
 
 # Configure logging with improved format and separate levels
 logging.basicConfig(
@@ -88,6 +106,12 @@ motor_b_cycle_state = {
     'qr_validated': False          # Whether QR validation has occurred
 }
 
+# Alarm cooldown system to prevent spam
+alarm_cooldown = {
+    'last_alarm_time': None,
+    'cooldown_duration': 15  # 15 seconds cooldown between alarms
+}
+
 def reset_motor_b_cycle():
     """Reset the Motor B and IR B cycle state for a new cycle"""
     global motor_b_cycle_state
@@ -100,6 +124,42 @@ def reset_motor_b_cycle():
         'grabber2_completed': False,
         'qr_validated': False
     }
+
+def play_alarm_sound():
+    """Play alarm sound when metallic item is detected with cooldown to prevent spam"""
+    global alarm_cooldown
+    current_time = time.time()
+    
+    # Check if we're still in cooldown period
+    if (alarm_cooldown['last_alarm_time'] is not None and 
+        current_time - alarm_cooldown['last_alarm_time'] < alarm_cooldown['cooldown_duration']):
+        
+        remaining_time = alarm_cooldown['cooldown_duration'] - (current_time - alarm_cooldown['last_alarm_time'])
+        logger.info(f"🔇 ALARM COOLDOWN: Metallic item detected but alarm in cooldown ({remaining_time:.1f}s remaining)")
+        return False  # Return False to indicate alarm was not played due to cooldown
+    
+    def play_sound():
+        try:
+            if PYGAME_AVAILABLE and pygame.mixer.get_init():
+                # Path to alarm sound on Raspberry Pi
+                alarm_path = "/sound/alarm.mp3"
+                if os.path.exists(alarm_path):
+                    sound = pygame.mixer.Sound(alarm_path)
+                    sound.play()
+                    logger.info("🚨 ALARM: Metallic item detected - Alarm sound played")
+                else:
+                    logger.warning(f"⚠️ ALARM: Sound file not found: {alarm_path}")
+            else:
+                logger.warning("⚠️ ALARM: Pygame mixer not available")
+        except Exception as e:
+            logger.error(f"❌ ALARM: Failed to play alarm sound: {e}")
+    
+    # Update last alarm time
+    alarm_cooldown['last_alarm_time'] = current_time
+    
+    # Play alarm sound in background thread to avoid blocking
+    threading.Thread(target=play_sound, daemon=True).start()
+    return True  # Return True to indicate alarm was played
     logger.info("✅ CYCLE RESET: Motor B and IR B cycle state reset complete")
 
 # MQTT Listener Class
@@ -155,15 +215,16 @@ class MQTTListener:
                         # Extract the numeric value from formatted message
                         weight_match = re.search(r'Final Weight:\s*([0-9]+\.?[0-9]*)', message)
                         if weight_match:
-                            weight = float(weight_match.group(1))
-                            logger.info(f"LOADCELL: Parsed formatted weight: {weight}g from message: {message}")
+                            weight_grams = float(weight_match.group(1))
+                            weight = weight_grams / 1000  # Convert grams to kg for consistent storage
+                            logger.info(f"LOADCELL: Parsed formatted weight: {weight_grams}g ({weight}kg) from message: {message}")
                             
                             # Store weight in database first, then start grabber1
                             def process_final_weight():
                                 try:
                                     logger.info("STEP 3 - FINAL WEIGHT RECEIVED: Storing in database...")
                                     
-                                    # Store weight data in database
+                                    # Store weight data in database (weight is already in kg)
                                     mqtt_sensor_data['loadcell']['weight'] = weight
                                     mqtt_sensor_data['loadcell']['timestamp'] = datetime.now().isoformat()
                                     
@@ -263,6 +324,124 @@ class MQTTListener:
                 except ValueError:
                     logger.warning(f"Invalid box dimensions values: {message}")
             
+            # Handle loadcell status messages (Step 2: Load cell status updates)
+            elif topic.lower() == 'esp32/loadcell/status':
+                try:
+                    logger.info(f"LOADCELL STATUS: {message}")
+                    
+                    # Check for specific loadcell status messages
+                    if "Advanced load cell started" in message:
+                        logger.info("✅ LOADCELL: Advanced load cell started successfully")
+                        
+                        # Emit loadcell start status via WebSocket
+                        socketio.emit('workflow_progress', {
+                            'step': 2.1,
+                            'status': 'loadcell_started',
+                            'message': 'Load cell started and ready for measurement',
+                            'timestamp': datetime.now().isoformat(),
+                            'triggered_by': 'loadcell_start_confirmation'
+                        })
+                        
+                    elif "Weight detected! Collecting data" in message:
+                        logger.info("📊 LOADCELL: Weight detected, starting data collection")
+                        
+                        # Emit weight detection status via WebSocket
+                        socketio.emit('workflow_progress', {
+                            'step': 2.2,
+                            'status': 'weight_detected',
+                            'message': 'Weight detected on load cell - collecting measurement data',
+                            'timestamp': datetime.now().isoformat(),
+                            'triggered_by': 'loadcell_weight_detection'
+                        })
+                        
+                    elif "load cell stopped" in message.lower() or "stopped" in message.lower():
+                        logger.info("⏹️ LOADCELL: Load cell stopped")
+                        
+                        # Emit loadcell stop status via WebSocket
+                        socketio.emit('workflow_progress', {
+                            'step': 2.9,
+                            'status': 'loadcell_stopped',
+                            'message': 'Load cell measurement stopped',
+                            'timestamp': datetime.now().isoformat(),
+                            'triggered_by': 'loadcell_stop_confirmation'
+                        })
+                        
+                    else:
+                        # Generic loadcell status message
+                        socketio.emit('loadcell_status', {
+                            'status': 'update',
+                            'message': message,
+                            'timestamp': datetime.now().isoformat()
+                        })
+                        
+                except Exception as e:
+                    logger.error(f"Error processing loadcell status: {e}")
+            
+            # Handle actuator status messages (ESP32 autonomous actuator operations)
+            elif topic.lower() == 'esp32/actuator/status':
+                try:
+                    logger.info(f"ACTUATOR STATUS: {message}")
+                    
+                    # Check for specific actuator status messages
+                    if "pushing" in message.lower():
+                        logger.info("🔧 ACTUATOR: Actuator pushing (autonomous ESP32 operation)")
+                        
+                        # Emit actuator start status via WebSocket
+                        socketio.emit('workflow_progress', {
+                            'step': 2.1,
+                            'status': 'actuator_pushing',
+                            'message': 'Actuator pushing (ESP32 autonomous)',
+                            'timestamp': datetime.now().isoformat(),
+                            'triggered_by': 'esp32_autonomous_actuator'
+                        })
+                        
+                    elif "complete" in message.lower() or "cycle complete" in message.lower():
+                        logger.info("✅ ACTUATOR: Actuator cycle complete (loadcell already started simultaneously)")
+                        
+                        # Just emit status update - loadcell was already started simultaneously
+                        socketio.emit('workflow_progress', {
+                            'step': 2.1,
+                            'status': 'actuator_complete',
+                            'message': 'Actuator cycle complete (loadcell already started)',
+                            'timestamp': datetime.now().isoformat(),
+                            'triggered_by': 'actuator_complete'
+                        })
+                        
+                    elif "started" in message.lower():
+                        logger.info("⚡ ACTUATOR: Actuator started - Will start loadcell after completion")
+                        
+                        # Emit actuator start status via WebSocket
+                        socketio.emit('workflow_progress', {
+                            'step': 2.1,
+                            'status': 'actuator_started',
+                            'message': 'Actuator started - Will start loadcell after completion',
+                            'timestamp': datetime.now().isoformat(),
+                            'triggered_by': 'actuator_start_confirmed'
+                        })
+                        
+                    elif "stopped" in message.lower():
+                        logger.info("⏹️ ACTUATOR: Actuator stopped")
+                        
+                        # Emit actuator stop status via WebSocket
+                        socketio.emit('workflow_progress', {
+                            'step': 2.9,
+                            'status': 'actuator_stopped',
+                            'message': 'Actuator stopped',
+                            'timestamp': datetime.now().isoformat(),
+                            'triggered_by': 'esp32_actuator_stop'
+                        })
+                        
+                    else:
+                        # Generic actuator status message
+                        socketio.emit('actuator_status', {
+                            'status': 'update',
+                            'message': message,
+                            'timestamp': datetime.now().isoformat()
+                        })
+                        
+                except Exception as e:
+                    logger.error(f"Error processing actuator status: {e}")
+            
             # Handle IR sensor trigger (Step 1: IR sensor detects object approaching)
             # NOTE: This should ONLY respond to actual IR sensor data from ESP32 hardware
             # The ESP32 sends these messages autonomously when its physical IR sensor detects objects
@@ -324,72 +503,61 @@ class MQTTListener:
                 try:
                     # Check for Motor A stopped by IR A message
                     if 'Motor A stopped by IR A' in message:
-                        logger.info(f"STEP 2 - MOTOR STATUS: Motor A stopped by IR A - Starting actuator then loadcell")
+                        logger.info(f"STEP 2 - MOTOR STATUS: Motor A stopped by IR A - Starting actuator and loadcell immediately")
                         
-                        # Send actuator first, then loadcell after actuator completes
-                        def send_actuator_then_loadcell():
+                        # Start both actuator and loadcell at the same time (parallel execution, no delay)
+                        def send_actuator_and_loadcell_simultaneously():
                             try:
-                                # STEP 1: Start actuator with 5 second delay
-                                logger.info("STEP 2.1 - ACTUATOR: Adding 5 second delay before starting actuator...")
+                                logger.info("STEP 2.1 - IMMEDIATE START: Motor A stopped, starting actuator and loadcell immediately...")
                                 
-                                # Add 5 second delay as requested
-                                time.sleep(5)
-                                
-                                logger.info("STEP 2.1 - ACTUATOR DELAY COMPLETE: Sending actuator start command...")
+                                # No delay - start both immediately
                                 
                                 # Send actuator start request via MQTT
                                 actuator_success = mqtt_listener.publish_message('esp32/actuator/request', 'start')
                                 if actuator_success:
                                     logger.info("SUCCESS: Actuator START request sent (esp32/actuator/request > start)")
-                                    
-                                    # Emit WebSocket notification for actuator start
-                                    socketio.emit('workflow_progress', {
-                                        'step': 2.1,
-                                        'status': 'actuator_start_requested',
-                                        'message': 'Actuator start requested after 5s delay',
-                                        'timestamp': datetime.now().isoformat(),
-                                        'triggered_by': 'motor_a_ir_a_delay'
-                                    })
-                                    
-                                    logger.info("🔧 WORKFLOW: Motor A stopped → 5s delay → Actuator activated")
                                 else:
                                     logger.error("FAILED: Could not send actuator start request")
-                                    return  # Don't proceed to loadcell if actuator failed
                                 
-                                # STEP 2: Start loadcell after actuator
-                                logger.info("STEP 2.2 - LOADCELL: Actuator started, now starting loadcell...")
-                                
-                                # Send loadcell request via MQTT
+                                # Send loadcell start request via MQTT (at the same time)
                                 loadcell_success = mqtt_listener.publish_message('esp32/loadcell/request', 'start')
                                 if loadcell_success:
-                                    logger.info("SUCCESS: Loadcell START request sent after actuator (esp32/loadcell/request > start)")
-                                    
-                                    # Emit workflow progress via WebSocket
-                                    socketio.emit('workflow_progress', {
-                                        'step': 2.2,
-                                        'status': 'loadcell_start_requested',
-                                        'message': 'Loadcell started after actuator activation',
-                                        'timestamp': datetime.now().isoformat(),
-                                        'triggered_by': 'actuator_complete'
-                                    })
-                                    
-                                    logger.info("� WORKFLOW: Actuator → Loadcell → Weight measurement")
+                                    logger.info("SUCCESS: Loadcell START request sent (esp32/loadcell/request > start)")
                                 else:
-                                    logger.error("FAILED: Could not send loadcell request after actuator")
+                                    logger.error("FAILED: Could not send loadcell start request")
+                                
+                                # Emit WebSocket notification for simultaneous start
+                                socketio.emit('workflow_progress', {
+                                    'step': 2.1,
+                                    'status': 'actuator_and_loadcell_start_requested',
+                                    'message': 'Actuator and Loadcell started simultaneously (no delay)',
+                                    'timestamp': datetime.now().isoformat(),
+                                    'triggered_by': 'motor_a_stopped_ir_a',
+                                    'actuator_started': actuator_success,
+                                    'loadcell_started': loadcell_success
+                                })
+                                
+                                if actuator_success and loadcell_success:
+                                    logger.info("✅ WORKFLOW: Motor A stopped → Actuator & Loadcell started immediately (parallel)")
+                                elif actuator_success or loadcell_success:
+                                    logger.warning("⚠️ PARTIAL SUCCESS: Only one of actuator/loadcell started successfully")
+                                else:
+                                    logger.error("❌ FAILED: Both actuator and loadcell failed to start")
                                     
                             except Exception as e:
-                                logger.error(f"Error in actuator-loadcell sequence: {e}")
+                                logger.error(f"Error in simultaneous actuator/loadcell sequence: {e}")
                         
-                        # Start sequential process in background thread
-                        sequence_thread = threading.Thread(target=send_actuator_then_loadcell, daemon=True)
-                        sequence_thread.start()
+                        # Start both systems in background thread
+                        parallel_thread = threading.Thread(target=send_actuator_and_loadcell_simultaneously, daemon=True)
+                        parallel_thread.start()
                         
                         # Emit immediate motor status via WebSocket
                         socketio.emit('workflow_progress', {
                             'step': 2,
-                            'status': 'motor_a_stopped',
-                            'message': 'Motor A stopped by IR A - Requesting weight measurement',
-                            'timestamp': datetime.now().isoformat()
+                            'status': 'motor_a_stopped_parallel_sequence',
+                            'message': 'Motor A stopped by IR A - Starting actuator and loadcell immediately',
+                            'timestamp': datetime.now().isoformat(),
+                            'triggered_by': 'motor_a_stopped_ir_a'
                         })
                     
                     # Check for IR B triggered message - only if IR B is enabled
@@ -1309,6 +1477,91 @@ class MQTTListener:
                         
                 except Exception as e:
                     logger.error(f"Error processing IR B sensor status: {e}")
+            
+            # Handle proximity sensor status messages (metallic item detection)
+            elif topic.lower() == 'esp32/proximity/status':
+                try:
+                    logger.info(f"PROXIMITY SENSOR STATUS: {message}")
+                    
+                    # Check for metallic item detection messages
+                    if any(keyword in message.lower() for keyword in ['metallic detected', 'metal detected', 'metallic item', 'metal object']):
+                        logger.warning("🚨 METALLIC ITEM DETECTED: Proximity sensor detected metallic object!")
+                        
+                        # Play alarm sound with cooldown protection
+                        alarm_played = play_alarm_sound()
+                        
+                        if alarm_played:
+                            # Alarm was played (not in cooldown)
+                            alert_message = 'METALLIC ITEM DETECTED! Alarm sound played.'
+                            workflow_message = 'METALLIC ITEM DETECTED - Security alert triggered'
+                        else:
+                            # Alarm was in cooldown
+                            remaining_time = alarm_cooldown['cooldown_duration'] - (time.time() - alarm_cooldown['last_alarm_time'])
+                            alert_message = f'METALLIC ITEM DETECTED! Alarm in cooldown ({remaining_time:.1f}s remaining).'
+                            workflow_message = f'METALLIC ITEM DETECTED - Alarm in cooldown ({remaining_time:.1f}s remaining)'
+                        
+                        # Emit proximity sensor metallic detection alert via WebSocket
+                        socketio.emit('proximity_alert', {
+                            'status': 'metallic_detected',
+                            'message': alert_message,
+                            'alert_type': 'danger',
+                            'alarm_played': alarm_played,
+                            'timestamp': datetime.now().isoformat(),
+                            'triggered_by': 'proximity_sensor_metallic_detection'
+                        })
+                        
+                        # Also emit as workflow progress for monitoring
+                        socketio.emit('workflow_progress', {
+                            'step': 'proximity_alert',
+                            'status': 'metallic_detected',
+                            'message': workflow_message,
+                            'alarm_played': alarm_played,
+                            'timestamp': datetime.now().isoformat(),
+                            'triggered_by': 'proximity_sensor_metallic_detection'
+                        })
+                        
+                    # Check for proximity sensor started messages
+                    elif "started" in message.lower() or "active" in message.lower():
+                        logger.info("✅ PROXIMITY SENSOR: Proximity sensor started and active")
+                        
+                        # Emit proximity sensor started status via WebSocket
+                        socketio.emit('workflow_progress', {
+                            'step': 'proximity_sensor',
+                            'status': 'active',
+                            'message': 'Proximity sensor started and monitoring for metallic items',
+                            'timestamp': datetime.now().isoformat()
+                        })
+                        
+                    # Check for proximity sensor ready messages
+                    elif "ready" in message.lower():
+                        logger.info("🟢 PROXIMITY SENSOR: Proximity sensor ready for detection")
+                        
+                        # Emit proximity sensor ready status via WebSocket
+                        socketio.emit('workflow_progress', {
+                            'step': 'proximity_sensor',
+                            'status': 'ready',
+                            'message': 'Proximity sensor ready for metallic item detection',
+                            'timestamp': datetime.now().isoformat()
+                        })
+                        
+                    # Check for proximity sensor stopped messages
+                    elif "stopped" in message.lower() or "disabled" in message.lower():
+                        logger.info("🛑 PROXIMITY SENSOR: Proximity sensor stopped/disabled")
+                        
+                        # Emit proximity sensor stopped status via WebSocket
+                        socketio.emit('workflow_progress', {
+                            'step': 'proximity_sensor',
+                            'status': 'stopped',
+                            'message': 'Proximity sensor stopped/disabled',
+                            'timestamp': datetime.now().isoformat()
+                        })
+                        
+                    else:
+                        # Generic proximity sensor status
+                        logger.info(f"PROXIMITY SENSOR: {message}")
+                        
+                except Exception as e:
+                    logger.error(f"Error processing proximity sensor status: {e}")
                     
         except Exception as e:
             logger.error(f"Error processing MQTT sensor data: {e}")
@@ -1538,16 +1791,16 @@ def get_contact_number_from_qr(qr_data):
     """Get contact number from QR data by querying the backend API"""
     try:
         # Query the backend API to get order details for this QR code
-        backend_url = f'{os.getenv("BACKEND_URL", "http://10.194.125.225:5000")}/api/validate-qr-code'
-        payload = {'qr_code': qr_data}
+        backend_url = f'{os.getenv("BACKEND_URL", "http://10.194.125.225:5000")}/api/validate-qr'
+        payload = {'qr_data': qr_data}
         
         response = requests.post(backend_url, json=payload, timeout=10)
         
         if response.status_code == 200:
             result = response.json()
-            if result.get('valid') and result.get('order'):
-                contact_number = result['order'].get('contact_number')
-                if contact_number:
+            if result.get('valid'):
+                contact_number = result.get('contact_number')
+                if contact_number and contact_number != 'N/A':
                     logger.info(f"Contact number found for QR {qr_data}: {contact_number}")
                     return contact_number
                 else:
@@ -1601,16 +1854,37 @@ def check_for_new_qr_scans():
                                 order_details = latest_scan.get('order', {})
                                 order_number = latest_scan.get('order_number', qr_data)
                                 
-                                receipt_response = requests.post(
-                                    f'{os.getenv("BACKEND_URL", "http://10.194.125.225:5000")}/api/print-receipt',
-                                    json={
-                                        'qr_data': qr_data,
-                                        'order_number': order_number,
-                                        'order_details': order_details,
-                                        'source': 'qr_validation_cycle'
-                                    },
-                                    timeout=10
-                                )
+                                # Get order details from database for printing
+                                conn = sqlite3.connect('database.db')
+                                conn.row_factory = dict_factory
+                                c = conn.cursor()
+                                c.execute('SELECT * FROM orders WHERE order_number = ?', (order_number,))
+                                order_data = c.fetchone()
+                                conn.close()
+                                
+                                if order_data:
+                                    # Format order data for Raspberry Pi printer
+                                    printer_data = {
+                                        'orderNumber': order_data['order_number'],
+                                        'customerName': order_data['customer_name'],
+                                        'date': order_data['date'],
+                                        'email': order_data['email'],
+                                        'contactNumber': order_data.get('contact_number', 'N/A'),
+                                        'address': order_data['address'],
+                                        'productName': order_data['product_name'],
+                                        'amount': f"₱{order_data['amount']:.2f}",
+                                        'timestamp': datetime.now().isoformat()
+                                    }
+                                    
+                                    # Call Raspberry Pi print service directly
+                                    receipt_response = requests.post(
+                                        f'{os.getenv("RASPBERRY_PI_URL", "http://10.194.125.227:5001")}/print-receipt',
+                                        json=printer_data,
+                                        timeout=10
+                                    )
+                                else:
+                                    logger.error(f"❌ ORDER NOT FOUND: Could not find order {order_number} in database")
+                                    receipt_response = None
                                 
                                 if receipt_response.status_code == 200:
                                     logger.info(f"✅ RECEIPT PRINTED: Receipt generated successfully for Order {order_number}")
@@ -3046,163 +3320,86 @@ def validate_qr():
 def on_qr_detected(qr_data, validation_result):
     """Callback function called when new QR is detected"""
     try:
-        # Check if QR code is valid and print receipt without QR code
+        # Check if QR code is valid - process asynchronously to avoid blocking camera
         if validation_result.get('valid'):
-            # Print receipt without QR code immediately
-            try:
-                # Prepare order data for printing (convert from validation_result format)
-                receipt_data = {
-                    'orderNumber': validation_result.get('order_number', qr_data),
-                    'customerName': validation_result.get('customer_name', 'N/A'),
-                    'productName': validation_result.get('product_name', 'N/A'),
-                    'amount': str(validation_result.get('amount', '0.00')),
-                    'date': validation_result.get('date', datetime.now().strftime('%Y-%m-%d')),
-                    'address': validation_result.get('address', 'N/A'),
-                    'contactNumber': validation_result.get('contact_number', 'N/A'),
-                    'email': validation_result.get('email', '')
-                }
-                
-                # Create and print receipt without QR code
-                receipt = printer.create_receipt(receipt_data)
-                if receipt:
-                    success, message = printer.print_receipt(receipt)
-                    if success:
-                        logger.info(f"Receipt printed successfully for order {qr_data}")
-                    else:
-                        logger.error(f"Failed to print receipt for order {qr_data}: {message}")
-                else:
-                    logger.error(f"Failed to create receipt for order {qr_data}")
-                    
-            except Exception as print_error:
-                logger.error(f"Error printing receipt for QR {qr_data}: {print_error}")
+            logger.info(f"VALID QR DETECTED: {qr_data} - Starting async processing")
+            # Process valid QR in background thread to avoid blocking camera
+            threading.Thread(
+                target=process_valid_qr_async, 
+                args=(qr_data, validation_result), 
+                daemon=True
+            ).start()
+        else:
+            # For invalid QR codes, just log (no blocking operations)
+            logger.info(f"INVALID QR DETECTED: {qr_data} - {validation_result.get('message', 'Unknown error')}")
+    except Exception as e:
+        logger.error(f"Error in QR detection callback: {e}")
+
+def process_valid_qr_async(qr_data, validation_result):
+    """Process valid QR code asynchronously to avoid blocking camera"""
+    try:
+        logger.info(f"ASYNC QR PROCESSING: Starting background processing for {qr_data}")
+        
+        # Print receipt without QR code immediately
+        try:
+            # Prepare order data for printing (convert from validation_result format)
+            receipt_data = {
+                'orderNumber': validation_result.get('order_number', qr_data),
+                'customerName': validation_result.get('customer_name', 'N/A'),
+                'productName': validation_result.get('product_name', 'N/A'),
+                'amount': str(validation_result.get('amount', '0.00')),
+                'date': validation_result.get('date', datetime.now().strftime('%Y-%m-%d')),
+                'address': validation_result.get('address', 'N/A'),
+                'contactNumber': validation_result.get('contact_number', 'N/A'),
+                'email': validation_result.get('email', '')
+            }
             
-            # Send motor startB command immediately when QR is validated
-            try:
-                logger.info(f"QR VALIDATED - MOTOR CONTROL: Sending motor startB command for validated QR {qr_data}")
+            # Create and print receipt without QR code
+            receipt = printer.create_receipt(receipt_data)
+            if receipt:
+                success, message = printer.print_receipt(receipt)
+                if success:
+                    logger.info(f"RECEIPT PRINTED: Successfully printed receipt for order {qr_data}")
+                else:
+                    logger.error(f"RECEIPT FAILED: Failed to print receipt for order {qr_data}: {message}")
+            else:
+                logger.error(f"RECEIPT CREATION FAILED: Failed to create receipt for order {qr_data}")
                 
-                # Send motor startB command to begin the workflow
-                motor_success = mqtt_listener.publish_message('esp32/motor/request', 'startB')
-                if motor_success:
-                    logger.info(f"SUCCESS: Motor startB command sent (esp32/motor/request > startB)")
-                    
-                    # Emit WebSocket notification
+        except Exception as print_error:
+            logger.error(f"RECEIPT ERROR: Error printing receipt for QR {qr_data}: {print_error}")
+        
+        # Send motor startB command immediately when QR is validated
+        try:
+            logger.info(f"QR VALIDATED - MOTOR CONTROL: Sending motor startB command for validated QR {qr_data}")
+            
+            # Send motor startB command to begin the workflow
+            motor_success = mqtt_listener.publish_message('esp32/motor/request', 'startB')
+            if motor_success:
+                logger.info(f"SUCCESS: Motor startB command sent (esp32/motor/request > startB)")
+                
+                # Emit WebSocket notification in a try-catch to prevent blocking
+                try:
                     socketio.emit('motor_command', {
                         'command': 'startB',
                         'trigger': 'qr_validation',
                         'qr_data': qr_data,
                         'timestamp': datetime.now().isoformat()
                     })
-                    
-                else:
-                    logger.error(f"FAILED: Could not send motor startB command for QR {qr_data}")
-                    
-            except Exception as motor_error:
-                logger.error(f"Error sending motor startB command for QR {qr_data}: {motor_error}")
-            
-            # Determine stepper size based on box dimensions and send stepper command
-            try:
-                dimensions = mqtt_sensor_data['box_dimensions']
-                if all(d is not None for d in [dimensions['width'], dimensions['height'], dimensions['length']]):
-                    # Determine package size for stepper
-                    width, height, length = dimensions['width'], dimensions['height'], dimensions['length']
-                    package_size = determine_package_size(width, height, length)
-                    
-                    # Convert package size to stepper command (lowercase)
-                    stepper_size = package_size.lower()  # "small", "medium", or "large"
-                    
-                    # Store current size for later back command
-                    mqtt_sensor_data['stepper']['current_size'] = package_size
-                    
-                    logger.info(f"QR VALIDATED - STEPPER CONTROL: Determined size '{stepper_size}' from dimensions W:{width}, H:{height}, L:{length}")
-                    
-                    # Send stepper size command
-                    stepper_success = mqtt_listener.publish_message('esp32/stepper/request', stepper_size)
-                    if stepper_success:
-                        logger.info(f"SUCCESS: Stepper size command sent (esp32/stepper/request > {stepper_size})")
-                        
-                        # Emit WebSocket notification
-                        socketio.emit('stepper_command', {
-                            'command': stepper_size,
-                            'size': package_size,
-                            'dimensions': {'width': width, 'height': height, 'length': length},
-                            'qr_data': qr_data,
-                            'timestamp': datetime.now().isoformat()
-                        })
-                        
-                    else:
-                        logger.error(f"FAILED: Could not send stepper size command {stepper_size}")
-                else:
-                    logger.warning(f"QR VALIDATED - STEPPER CONTROL: Cannot determine size, missing dimensions W:{dimensions['width']}, H:{dimensions['height']}, L:{dimensions['length']}")
-                    
-            except Exception as stepper_error:
-                logger.error(f"Error in stepper control for QR {qr_data}: {stepper_error}")
-        
-        # Get the latest history to include image data
-        history = camera.get_qr_history()
-        latest_scan = history[0] if history else None
-        
-        # If QR is valid and we have sensor data, automatically apply package data
-        if validation_result.get('valid') and validation_result.get('order_id'):
-            weight = mqtt_sensor_data['loadcell']['weight']
-            dimensions = mqtt_sensor_data['box_dimensions']
-            
-            # Check if we have any sensor data to apply
-            if weight is not None or any(d is not None for d in [dimensions['width'], dimensions['height'], dimensions['length']]):
-                try:
-                    # Apply package data automatically
-                    package_data = {
-                        'order_number': qr_data,
-                        'order_id': validation_result['order_id'],
-                        'weight': weight,
-                        'width': dimensions['width'],
-                        'height': dimensions['height'],
-                        'length': dimensions['length'],
-                        'timestamp': datetime.now().isoformat()
-                    }
-                    
-                    # Send package data to main backend
-                    backend_package_url = 'http://10.194.125.225:5000/api/package-information'
-                    package_response = requests.post(backend_package_url, json=package_data, timeout=10)
-                    
-                    if package_response.status_code in [200, 201]:
-                        # Clear sensor data after successful application
-                        mqtt_sensor_data['loadcell']['weight'] = None
-                        mqtt_sensor_data['loadcell']['timestamp'] = None
-                        mqtt_sensor_data['box_dimensions']['width'] = None
-                        mqtt_sensor_data['box_dimensions']['height'] = None
-                        mqtt_sensor_data['box_dimensions']['length'] = None
-                        mqtt_sensor_data['box_dimensions']['timestamp'] = None
-                        
-                        logger.info(f"✅ Automatically applied package data for order {qr_data}: W:{weight}, D:{dimensions['width']}x{dimensions['height']}x{dimensions['length']}")
-                        
-                        # Add package data to validation result for emission
-                        validation_result['package_data_applied'] = True
-                        validation_result['package_data'] = package_data
-                    else:
-                        logger.warning(f"⚠️ Failed to apply package data for order {qr_data}: {package_response.status_code}")
-                        
-                except Exception as e:
-                    logger.error(f"❌ Error auto-applying package data for {qr_data}: {e}")
+                except Exception as ws_error:
+                    logger.warning(f"WEBSOCKET WARNING: Failed to emit motor command event: {ws_error}")
+                
             else:
-                logger.info(f"ℹ️ No sensor data available to apply for order {qr_data}")
+                logger.error(f"FAILED: Could not send motor startB command for QR {qr_data}")
+                
+        except Exception as motor_error:
+            logger.error(f"MOTOR ERROR: Error sending motor startB command for QR {qr_data}: {motor_error}")
+            
+        logger.info(f"ASYNC QR PROCESSING: Completed background processing for {qr_data}")
         
-        socketio.emit('qr_detected', {
-            'data': qr_data,
-            'timestamp': datetime.now().isoformat(),
-            'type': 'QR Code',
-            'validation': validation_result,
-            'latest_scan': latest_scan,
-            'sensor_data': mqtt_sensor_data.copy()  # Include current sensor data
-        })
-        
-        # Emit updated history for real-time updates
-        socketio.emit('qr_history_updated', {
-            'history': history[:10]  # Send only the latest 10 entries
-        })
-        
-        logger.info(f"Broadcasted QR detection via WebSocket: {qr_data}")
     except Exception as e:
-        logger.error(f"Error broadcasting QR detection: {e}")
+        logger.error(f"ASYNC QR PROCESSING ERROR: Unexpected error processing QR {qr_data}: {e}")
+
+# MQTT listeners and handlers
 
 def periodic_status_broadcast():
     """Periodically broadcast system status"""

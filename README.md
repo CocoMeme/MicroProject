@@ -41,12 +41,12 @@ The Automated Parcel Processing System is a comprehensive IoT solution that comb
 
 ### Step 1: IR Detection & Motor Control
 - **Trigger**: IR Sensor A detects incoming package
-- **Action**: Stops Motor A, starts actuator with 5-second delay
+- **Action**: Stops Motor A, starts loadcell directly
 - **Status**: `IR A triggered - Motor A stop requested`
 
 ### Step 2: Load Cell Weight Measurement
 - **Trigger**: Motor A status confirmation
-- **Action**: Activates load cell for weight measurement
+- **Action**: Activates load cell for weight measurement (no actuator delay)
 - **Status**: `Weight captured X.Xg`
 
 ### Step 3: Package Dimensioning

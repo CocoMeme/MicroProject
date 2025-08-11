@@ -7,6 +7,7 @@ import pygame
 import threading
 import time
 import logging
+import requests
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -47,6 +48,44 @@ class ReceiptPrinter:
             self.font_title = ImageFont.load_default()
             self.font_large = ImageFont.load_default()
 
+    def _get_package_info_from_api(self, order_number):
+        """Get package weight and size from web server database via API"""
+        try:
+            # Get the backend URL from environment or use default
+            backend_url = os.getenv('BACKEND_URL', 'http://10.201.197.225:5000')
+            api_url = f"{backend_url}/api/package-information/order/{order_number}"
+            
+            # Make API request to get package information
+            response = requests.get(api_url, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                weight_kg = data.get('weight')
+                package_size = data.get('package_size')
+                
+                # Convert weight to grams for display
+                weight_grams = weight_kg * 1000 if weight_kg else None
+                
+                if weight_grams or package_size:
+                    logger.info(f"Retrieved package info for {order_number}: {weight_grams:.1f}g, Size: {package_size}")
+                    return weight_grams, package_size
+                else:
+                    logger.info(f"No package data available for order {order_number}")
+                    return None, None
+            elif response.status_code == 404:
+                logger.info(f"No package information found for order {order_number}")
+                return None, None
+            else:
+                logger.warning(f"API request failed for {order_number}: HTTP {response.status_code}")
+                return None, None
+                
+        except requests.RequestException as e:
+            logger.warning(f"Could not fetch package info from API (server may be unreachable): {e}")
+            return None, None
+        except Exception as e:
+            logger.error(f"Error processing package info response: {e}")
+            return None, None
+
     def create_receipt(self, order_data):
         """Create receipt image in receipt style format without QR code"""
         try:
@@ -59,6 +98,9 @@ class ReceiptPrinter:
             missing_fields = [field for field in required_fields if not order_data.get(field)]
             if missing_fields:
                 raise ValueError(f"Missing required fields: {missing_fields}")
+
+            # Get package information from database
+            weight_grams, package_size = self._get_package_info_from_api(order_data['orderNumber'])
 
             # Calculate layout dimensions for receipt style
             text_height_regular = 25
@@ -76,12 +118,17 @@ class ReceiptPrinter:
             if order_data.get('email') and order_data['email'].strip():
                 customer_section += text_height_regular
             product_section = text_height_large * 2 + spacing  # Product and Amount
+            # Add package information section if data is available
+            package_section = 0
+            if weight_grams or package_size:
+                package_section = text_height_regular * 2 + spacing  # Weight and Package Size
             footer_section = text_height_regular * 2 + spacing  # Thank you message
 
             total_height = (
                 spacing + header_section + separator_line + order_section + 
                 separator_line + customer_section + separator_line + 
-                product_section + separator_line + footer_section + spacing
+                product_section + separator_line + package_section + 
+                separator_line + footer_section + spacing
             )
 
             # Create receipt image
@@ -137,6 +184,20 @@ class ReceiptPrinter:
             amount_str = f"₱ {str(order_data['amount'])}"
             draw.text((10, y), f"Amount: {amount_str}", font=self.font_large, fill='black')
             y += text_height_large + spacing
+
+            # Package Information Section (if available)
+            if weight_grams or package_size:
+                # Fourth separator line
+                draw.line([(10, y), (374, y)], fill='black', width=1)
+                y += line_spacing + spacing
+                
+                if weight_grams:
+                    draw.text((10, y), f"Weight: {weight_grams:.1f} g", font=self.font_regular, fill='black')
+                    y += text_height_regular
+                    
+                if package_size:
+                    draw.text((10, y), f"Package Size: {package_size}", font=self.font_regular, fill='black')
+                    y += text_height_regular + spacing
 
             # Final separator line
             draw.line([(10, y), (374, y)], fill='black', width=1)

@@ -746,7 +746,7 @@ export default function Scanner() {
                   <TableRow key={pkg.id || index}>
                     <TableCell>{pkg.order_id || 'N/A'}</TableCell>
                     <TableCell>{pkg.order_number || 'N/A'}</TableCell>
-                    <TableCell>{pkg.weight ? `${pkg.weight} kg` : 'N/A'}</TableCell>
+                    <TableCell>{pkg.weight ? `${(pkg.weight * 1000).toFixed(1)} g` : 'N/A'}</TableCell>
                     <TableCell>{pkg.height ? `${pkg.height} cm` : 'N/A'}</TableCell>
                     <TableCell>{pkg.width ? `${pkg.width} cm` : 'N/A'}</TableCell>
                     <TableCell>{pkg.length ? `${pkg.length} cm` : 'N/A'}</TableCell>

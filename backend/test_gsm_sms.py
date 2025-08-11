@@ -14,7 +14,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # MQTT Configuration (should match your Raspberry Pi settings)
-MQTT_BROKER = "10.194.125.227"  # Your Raspberry Pi IP
+MQTT_BROKER = "10.201.197.227"  # Your Raspberry Pi IP
 MQTT_PORT = 1883
 MQTT_CLIENT_ID = "GSM_SMS_Tester"
 

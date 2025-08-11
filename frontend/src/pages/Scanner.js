@@ -1169,7 +1169,7 @@ export default function Scanner() {
                               </TableCell>
                               <TableCell align="center">
                                 <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600 }}>
-                                  {pkg.weight ? `${pkg.weight} kg` : 'N/A'}
+                                  {pkg.weight ? `${(pkg.weight * 1000).toFixed(1)} g` : 'N/A'}
                                 </Typography>
                               </TableCell>
                               <TableCell align="center">

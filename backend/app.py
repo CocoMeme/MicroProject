@@ -664,6 +664,85 @@ def print_qr_code():
             'details': str(e)
         }), 500
 
+@app.route('/api/print-receipt', methods=['POST'])
+def print_receipt():
+    """Print receipt for QR validation workflow - called by server.py"""
+    try:
+        data = request.get_json()
+        qr_data = data.get('qr_data')
+        order_number = data.get('order_number')
+        order_details = data.get('order_details', {})
+
+        if not qr_data and not order_number:
+            return jsonify({'error': 'QR data or order number is required'}), 400
+
+        # Use order_number if provided, otherwise extract from qr_data
+        if not order_number:
+            order_number = qr_data
+
+        # Get order details from database using order_number
+        conn = sqlite3.connect('database.db')
+        conn.row_factory = dict_factory
+        c = conn.cursor()
+        c.execute('SELECT * FROM orders WHERE order_number = ?', (order_number,))
+        order_data = c.fetchone()
+        conn.close()
+
+        if not order_data:
+            return jsonify({'error': f'Order not found: {order_number}'}), 404
+
+        # Format order data for the printer (same format as print-qr)
+        printer_data = {
+            'orderNumber': order_data['order_number'],
+            'customerName': order_data['customer_name'],
+            'date': order_data['date'],
+            'email': order_data['email'],
+            'contactNumber': order_data.get('contact_number', 'N/A'),
+            'address': order_data['address'],
+            'productName': order_data['product_name'],
+            'amount': f"₱{order_data['amount']:.2f}",
+            'timestamp': datetime.now().isoformat()
+        }
+
+        # Forward the print request to the Raspberry Pi
+        try:
+            logger.info(f"Printing receipt for QR validation - Order: {order_number}")
+            response = requests.post(
+                f"{RASPBERRY_PI_URL}/print-receipt",
+                json=printer_data,
+                headers={'Content-Type': 'application/json'},
+                timeout=15
+            )
+
+            if response.status_code == 200:
+                return jsonify({
+                    'message': f'Receipt printed successfully for order {order_number}',
+                    'order_number': order_number
+                }), 200
+            else:
+                return jsonify({
+                    'error': 'Failed to print receipt',
+                    'details': response.text,
+                    'status_code': response.status_code
+                }), response.status_code
+
+        except requests.exceptions.ConnectionError:
+            return jsonify({
+                'error': 'Printer service is not available',
+                'details': 'Cannot connect to Raspberry Pi printer service'
+            }), 503
+        except requests.RequestException as e:
+            return jsonify({
+                'error': 'Failed to connect to printer service',
+                'details': str(e)
+            }), 500
+
+    except Exception as e:
+        return jsonify({
+            'error': 'Internal server error',
+            'details': str(e)
+        }), 500
+
 @app.route('/api/products', methods=['GET'])
 def get_products():
     return jsonify(products_data)
@@ -1331,6 +1410,36 @@ def get_all_package_information():
             'details': str(e)
         }), 500
 
+@app.route('/api/package-information/order/<string:order_number>', methods=['GET'])
+def get_package_information_by_order_number(order_number):
+    """Get package information for a specific order by order number"""
+    try:
+        conn = sqlite3.connect('database.db')
+        conn.row_factory = dict_factory
+        c = conn.cursor()
+        
+        c.execute('''
+            SELECT weight, package_size, width, height, length, timestamp 
+            FROM package_information 
+            WHERE order_number = ? 
+            ORDER BY created_at DESC 
+            LIMIT 1
+        ''', (order_number,))
+        
+        package_info = c.fetchone()
+        conn.close()
+        
+        if package_info:
+            return jsonify(package_info)
+        else:
+            return jsonify({'message': 'No package information found for this order'}), 404
+            
+    except Exception as e:
+        return jsonify({
+            'error': 'Failed to get package information',
+            'details': str(e)
+        }), 500
+
 @app.route('/api/scanned-codes/<int:order_id>', methods=['DELETE'])
 def delete_scanned_code(order_id):
     """Delete a scanned code entry to allow rescanning"""
@@ -1392,8 +1501,9 @@ def validate_qr_code():
             already_scanned = c.fetchone()
             
             if already_scanned:
-                # Order already scanned - return existing scan info
-                logger.info(f"QR code {qr_data} already scanned at {already_scanned['scanned_at']}")
+                # Order already scanned - return existing scan info WITHOUT printing or sound
+                # This prevents duplicate printing and sound for the same QR code
+                logger.info(f"QR code {qr_data} already scanned at {already_scanned['scanned_at']} - No print or sound triggered")
                 response_data = {
                     'valid': True,
                     'already_scanned': True,

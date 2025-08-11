@@ -11,3 +11,7 @@ paho-mqtt==1.6.1
 opencv-python==4.8.0.76
 requests==2.31.0
 python-dotenv==1.0.0
+# Use compatible picamera2 version to avoid allocator errors
+picamera2>=0.3.17,<0.4.0
+pyzbar==0.1.9
+numpy==1.24.3

@@ -13,8 +13,7 @@
 - **Trigger**: IR A sensor detects object approaching
 - **Actions**:
   1. Stops Motor A (`esp32/motor/request > stopA`)
-  2. Starts actuator after 5-second delay (`esp32/actuator/request > start`)
-  3. Starts loadcell (`esp32/loadcell/request > start`)
+  2. Starts loadcell directly (`esp32/loadcell/request > start`)
 
 ### Step 2: Weight Measurement
 - **Trigger**: Loadcell completes weight measurement
